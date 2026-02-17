@@ -15,6 +15,7 @@ Keep this list minimal to ease upstream rebases.
 | Patch ID | Ticket | Type | Files | Why | Upstream status | Removal criteria |
 | --- | --- | --- | --- | --- | --- | --- |
 | azure-annotations | OPS-24074 | Fix | pr_agent/git_providers/azuredevops_provider.py | Avoid import-time NameError when optional Azure DevOps dependencies are missing; this crash happens even when git_provider=github. | Not upstreamed yet. | Remove once upstream includes the fix and we rebase to a tag containing it. |
+| pyjwt-pin | OPS-24074 | Fix | requirements.txt | GitHub App JWT expects integer iss, but PyJWT >= 2.9 requires string; pin to a compatible PyJWT range to avoid auth failures. | Not upstreamed yet. | Remove once upstream pins PyJWT compatibly or updates auth logic. |
 
 ## Rebase checklist
 
