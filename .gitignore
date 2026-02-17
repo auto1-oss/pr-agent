@@ -4,6 +4,8 @@
 .env
 .venv/
 venv/
+lib/
+bin/
 pr_agent/settings/.secrets.toml
 __pycache__
 dist/
