@@ -23,8 +23,11 @@ Key guidelines for evaluation:
 - Validate the 'existing_code' field by confirming it matches or is accurately derived from code lines within a '__new hunk__' section of the PR code diff.
 - Ensure the 'improved_code' section accurately reflects the 'existing_code' segment after the suggested modification is applied.
 - Apply a nuanced scoring system:
-  - Reserve high scores (8-10) for suggestions addressing critical issues such as major bugs or security concerns.
-  - Assign moderate scores (3-7) to suggestions that tackle minor issues, improve code style, enhance readability, or boost maintainability.
+  - Reserve high scores (9-10) for critical issues such as major bugs or security concerns (merge-blocking, won't compile,
+    deterministic test failures, common-path crash, data loss/corruption, or clear contract breakage).
+  - Use scores (7-8) for important but not blocking issues (edge-case correctness, notable perf risk, misleading behavior,
+    significant maintainability risk).
+  - Assign moderate scores (3-6) to suggestions that tackle minor issues, improve code style, enhance readability, or boost maintainability.
   - Avoid inflating scores for suggestions that, while correct, offer only marginal improvements or optimizations.
 - Maintain the original order of suggestions in your feedback, corresponding to their input sequence.
 

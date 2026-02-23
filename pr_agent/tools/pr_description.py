@@ -461,13 +461,29 @@ class PRDescription:
         if 'description' in self.data:
             self.data['description'] = self.data.pop('description')
         if 'changes_diagram' in self.data:
-            changes_diagram = self.data.pop('changes_diagram').strip()
+            changes_diagram = self._sanitize_mermaid_diagram(self.data.pop('changes_diagram').strip())
             if changes_diagram.startswith('```'):
                 if not changes_diagram.endswith('```'):  # fallback for missing closing
                     changes_diagram += '\n```'
                 self.data['changes_diagram'] = '\n'+ changes_diagram
         if 'pr_files' in self.data:
             self.data['pr_files'] = self.data.pop('pr_files')
+
+    @staticmethod
+    def _sanitize_mermaid_diagram(diagram: str) -> str:
+        if not diagram:
+            return diagram
+
+        diagram_lines = diagram.splitlines()
+        if diagram_lines and diagram_lines[0].startswith("```"):
+            fence_end = diagram_lines[-1] if diagram_lines[-1].startswith("```") else None
+            body_lines = diagram_lines[1:-1] if fence_end else diagram_lines[1:]
+            body_lines = [line.replace("`", "") for line in body_lines]
+            if fence_end:
+                return "\n".join([diagram_lines[0]] + body_lines + [fence_end]).strip()
+            return "\n".join([diagram_lines[0]] + body_lines).strip()
+
+        return diagram.replace("`", "")
 
     def _prepare_labels(self) -> List[str]:
         pr_labels = []

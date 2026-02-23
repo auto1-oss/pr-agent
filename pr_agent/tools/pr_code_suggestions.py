@@ -414,7 +414,7 @@ class PRCodeSuggestions:
         else:
             # get_logger().error(f"Could not self-reflect on suggestions. using default score 7")
             for i, suggestion in enumerate(data["code_suggestions"]):
-                suggestion["score"] = 7
+                suggestion["score"] = 0
                 suggestion["score_why"] = ""
 
         return data
@@ -456,7 +456,7 @@ class PRCodeSuggestions:
                     get_logger().error(f"Error processing suggestion score {i}",
                                        artifact={"suggestion": suggestion,
                                                  "code_suggestions_feedback": code_suggestions_feedback[i]})
-                    suggestion["score"] = 7
+                    suggestion["score"] = 0
                     suggestion["score_why"] = ""
 
                 suggestion = self.validate_one_liner_suggestion_not_repeating_code(suggestion)
