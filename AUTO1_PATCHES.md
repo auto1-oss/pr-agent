@@ -12,7 +12,12 @@ Keep this list minimal to ease upstream rebases.
 
 ## Local patches
 
-None. Fork matches upstream as of the sync date above.
+| Patch ID | Ticket | Type | Files | Why | Upstream status | Removal criteria |
+| --- | --- | --- | --- | --- | --- | --- |
+| improve-score-rubric | OPS-54090 | Enhancement | pr_agent/settings/code_suggestions/pr_code_suggestions_reflect_prompts.toml | Clarify /improve scoring so merge-blocking issues score 9-10 and map to High severity. | Not upstreamed yet. | Remove once upstream clarifies the scoring rubric for merge-blocking issues. |
+| review-severity-emoji | OPS-54090 | Enhancement | pr_agent/algo/utils.py | Add a header emoji for findings severity summary in PR review output. | Not upstreamed yet. | Remove once upstream adds a default emoji for findings severity summary. |
+| improve-reflect-fallback-score | OPS-54090 | Fix | pr_agent/tools/pr_code_suggestions.py | Prevent inline suggestion spam when self-reflection fails by defaulting all suggestion scores to 0. | Not upstreamed yet. | Remove once upstream handles reflect failure without inflating scores. |
+| describe-mermaid-sanitize | OPS-54090 | Fix | pr_agent/tools/pr_description.py | Strip backticks from Mermaid diagrams to avoid GitHub render failures. | Not upstreamed yet. | Remove once upstream sanitizes Mermaid diagrams or fixes prompt output. |
 
 ## Rebase checklist
 

@@ -153,6 +153,7 @@ def convert_to_markdown_v2(output_data: dict,
         "Estimated effort to review [1-5]": "⏱️",
         "Contribution time cost estimate": "⏳",
         "Ticket compliance check": "🎫",
+        "Findings severity summary": "🚦",
     }
     markdown_text = ""
     if not incremental_review:
