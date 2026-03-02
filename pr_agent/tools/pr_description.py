@@ -25,9 +25,7 @@ from pr_agent.git_providers import (GithubProvider, get_git_provider,
 from pr_agent.git_providers.git_provider import get_main_pr_language
 from pr_agent.log import get_logger
 from pr_agent.servers.help import HelpMessage
-from pr_agent.tools.ticket_pr_compliance_check import (
-    extract_and_cache_pr_tickets, extract_ticket_links_from_pr_description,
-    extract_tickets)
+from pr_agent.tools.ticket_pr_compliance_check import extract_and_cache_pr_tickets
 
 
 class PRDescription:
@@ -71,7 +69,8 @@ class PRDescription:
             "enable_custom_labels": get_settings().config.enable_custom_labels,
             "custom_labels_class": "",  # will be filled if necessary in 'set_custom_labels' function
             "enable_semantic_files_types": get_settings().pr_description.enable_semantic_files_types,
-            "related_tickets": "",
+            "related_tickets": [],
+            "ticket_compliance_note": "",
             "include_file_summary_changes": len(self.git_provider.get_diff_files()) <= self.COLLAPSIBLE_FILE_LIST_THRESHOLD,
             "duplicate_prompt_examples": get_settings().config.get("duplicate_prompt_examples", False),
             "enable_pr_diagram": enable_pr_diagram,
@@ -129,6 +128,7 @@ class PRDescription:
                 if not self.git_provider.is_supported(
                         "publish_file_comments") or not get_settings().pr_description.inline_file_summary:
                     pr_body += "\n\n" + changes_walkthrough + "___\n\n"
+
             get_logger().debug("PR output", artifact={"title": pr_title, "body": pr_body})
 
             # Add help text if gfm_markdown is supported

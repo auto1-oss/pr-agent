@@ -5,6 +5,7 @@ from pr_agent.config_loader import get_settings
 from pr_agent.git_providers import GithubProvider
 from pr_agent.git_providers import AzureDevopsProvider
 from pr_agent.log import get_logger
+from pr_agent.tickets.jira_cloud import fetch_jira_ticket_context
 
 # Compile the regex pattern once, outside the function
 GITHUB_TICKET_PATTERN = re.compile(
@@ -64,13 +65,32 @@ def extract_ticket_links_from_pr_description(pr_description, repo_path, base_url
     return list(github_tickets)
 
 
-async def extract_tickets(git_provider):
+async def extract_tickets(git_provider) -> tuple[list | None, str]:
     MAX_TICKET_CHARACTERS = 10000
+    jira_ticket_compliance_note = ""
     try:
+        tickets_content = []
+
+        # Jira Cloud ticket extraction (prefix-only) from PR title, then branch.
+        # Supports basic, scoped-token, and explicit bearer/OAuth env configurations.
+        try:
+            pr_title = ""
+            if hasattr(git_provider, 'get_title'):
+                pr_title = git_provider.get_title() or ""
+            elif hasattr(git_provider, 'pr') and hasattr(git_provider.pr, 'title'):
+                pr_title = git_provider.pr.title or ""
+            pr_branch = git_provider.get_pr_branch() if hasattr(git_provider, 'get_pr_branch') else ""
+            jira_result = await fetch_jira_ticket_context(pr_title, pr_branch)
+            if jira_result.note:
+                jira_ticket_compliance_note = jira_result.note
+            if jira_result.ticket:
+                tickets_content.append(jira_result.ticket)
+        except Exception as e:
+            get_logger().warning(f"Failed to extract Jira ticket: {type(e).__name__}")
+
         if isinstance(git_provider, GithubProvider):
             user_description = git_provider.get_user_description()
             tickets = extract_ticket_links_from_pr_description(user_description, git_provider.repo, git_provider.base_url_html)
-            tickets_content = []
 
             if tickets:
 
@@ -130,11 +150,10 @@ async def extract_tickets(git_provider):
                         'sub_issues': sub_issues_content  # Store sub-issues content
                     })
 
-                return tickets_content
+            return tickets_content or None, jira_ticket_compliance_note
 
         elif isinstance(git_provider, AzureDevopsProvider):
             tickets_info = git_provider.get_linked_work_items()
-            tickets_content = []
             for ticket in tickets_info:
                 try:
                     ticket_body_str = ticket.get("body", "")
@@ -156,21 +175,32 @@ async def extract_tickets(git_provider):
                         f"Error processing Azure DevOps ticket: {e}",
                         artifact={"traceback": traceback.format_exc()},
                     )
-            return tickets_content
+            return tickets_content, jira_ticket_compliance_note
 
+
+        if tickets_content:
+            return tickets_content, jira_ticket_compliance_note
     except Exception as e:
         get_logger().error(f"Error extracting tickets error= {e}",
                            artifact={"traceback": traceback.format_exc()})
+
+    return None, jira_ticket_compliance_note
 
 
 async def extract_and_cache_pr_tickets(git_provider, vars):
     if not get_settings().get('pr_reviewer.require_ticket_analysis_review', False):
         return
 
+    vars['ticket_compliance_note'] = ""
+
     related_tickets = get_settings().get('related_tickets', [])
+    cached_ticket_compliance_note = get_settings().get('ticket_compliance_note', '')
 
     if not related_tickets:
-        tickets_content = await extract_tickets(git_provider)
+        tickets_content, jira_ticket_compliance_note = await extract_tickets(git_provider)
+
+        vars['ticket_compliance_note'] = jira_ticket_compliance_note or ""
+        get_settings().set('ticket_compliance_note', vars['ticket_compliance_note'])
 
         if tickets_content:
             # Store sub-issues along with main issues
@@ -189,6 +219,7 @@ async def extract_and_cache_pr_tickets(git_provider, vars):
     else:
         get_logger().info("Using cached tickets", artifact={"tickets": related_tickets})
         vars['related_tickets'] = related_tickets
+        vars['ticket_compliance_note'] = cached_ticket_compliance_note or ''
 
 
 def check_tickets_relevancy():

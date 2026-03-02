@@ -129,7 +129,8 @@ def convert_to_markdown_v2(output_data: dict,
                            gfm_supported: bool = True,
                            incremental_review=None,
                            git_provider=None,
-                           files=None) -> str:
+                           files=None,
+                           ticket_note: str = '') -> str:
     """
     Convert a dictionary of data into markdown format.
     Args:
@@ -170,8 +171,12 @@ def convert_to_markdown_v2(output_data: dict,
     if gfm_supported:
         markdown_text += "<table>\n"
 
-    todo_summary = output_data['review'].pop('todo_summary', '')
-    for key, value in output_data['review'].items():
+    review_data = copy.deepcopy(output_data['review'])
+    todo_summary = review_data.pop('todo_summary', '')
+    ticket_compliance_value = review_data.pop('ticket_compliance_check', None)
+    ticket_note = (ticket_note or '').strip()
+    ticket_compliance_rendered = False
+    for key, value in review_data.items():
         if value is None or value == '' or value == {} or value == []:
             if key.lower() not in ['can_be_split', 'key_issues_to_review']:
                 continue
@@ -210,8 +215,6 @@ def convert_to_markdown_v2(output_data: dict,
                     markdown_text += f'### {emoji} No relevant tests\n\n'
                 else:
                     markdown_text += f"### {emoji} PR contains tests\n\n"
-        elif 'ticket compliance check' in key_nice.lower():
-            markdown_text = ticket_markdown_logic(emoji, markdown_text, value, gfm_supported)
         elif 'contribution time cost estimate' in key_nice.lower():
             if gfm_supported:
                 markdown_text += f"<tr><td>{emoji}&nbsp;<strong>Contribution time estimate</strong> (best, average, worst case): "
@@ -272,7 +275,6 @@ def convert_to_markdown_v2(output_data: dict,
                 issues = value
                 if gfm_supported:
                     markdown_text += f"<tr><td>"
-                    # markdown_text += f"{emoji}&nbsp;<strong>{key_nice}</strong><br><br>\n\n"
                     markdown_text += f"{emoji}&nbsp;<strong>Recommended focus areas for review</strong><br><br>\n\n"
                 else:
                     markdown_text += f"### {emoji} Recommended focus areas for review\n\n#### \n"
@@ -320,11 +322,22 @@ def convert_to_markdown_v2(output_data: dict,
             else:
                 markdown_text += f"### {emoji} {key_nice}: {value}\n\n"
 
+        if ('score' in key_nice.lower() and not ticket_compliance_rendered and
+                (ticket_compliance_value is not None or ticket_note)):
+            markdown_text = ticket_markdown_logic(
+                emojis['Ticket compliance check'], markdown_text, ticket_compliance_value, gfm_supported, ticket_note
+            )
+            ticket_compliance_rendered = True
+
+    if not ticket_compliance_rendered and (ticket_compliance_value is not None or ticket_note):
+        markdown_text = ticket_markdown_logic(
+            emojis['Ticket compliance check'], markdown_text, ticket_compliance_value, gfm_supported, ticket_note
+        )
+
     if gfm_supported:
         markdown_text += "</table>\n"
 
     return markdown_text
-
 
 def extract_relevant_lines_str(end_line, files, relevant_file, start_line, dedent=False) -> str:
     """
@@ -366,22 +379,40 @@ def extract_relevant_lines_str(end_line, files, relevant_file, start_line, deden
         return ""
 
 
-def ticket_markdown_logic(emoji, markdown_text, value, gfm_supported) -> str:
+def normalize_ticket_requirement_text(text: str) -> str:
+    text = (text or '').strip()
+    if not text:
+        return ''
+
+    normalized_lines = [line.strip() for line in text.splitlines() if line.strip()]
+    placeholder_lines = {'-', '*', 'none', '(none)', 'n/a', '(n/a)'}
+    normalized_lines = [line for line in normalized_lines if line.lower() not in placeholder_lines]
+    if not normalized_lines:
+        return ''
+
+    return '\n'.join(normalized_lines)
+
+
+def ticket_markdown_logic(emoji, markdown_text, value, gfm_supported, ticket_note: str = '') -> str:
     ticket_compliance_str = ""
     compliance_emoji = ''
     # Track compliance levels across all tickets
     all_compliance_levels = []
+    ticket_note = (ticket_note or '').strip()
 
     if isinstance(value, list):
         for ticket_analysis in value:
             try:
+                if not isinstance(ticket_analysis, dict):
+                    continue
                 ticket_url = ticket_analysis.get('ticket_url', '').strip()
                 explanation = ''
                 ticket_compliance_level = ''  # Individual ticket compliance
-                fully_compliant_str = ticket_analysis.get('fully_compliant_requirements', '').strip()
-                not_compliant_str = ticket_analysis.get('not_compliant_requirements', '').strip()
-                requires_further_human_verification = ticket_analysis.get('requires_further_human_verification',
-                                                                          '').strip()
+                fully_compliant_str = normalize_ticket_requirement_text(ticket_analysis.get('fully_compliant_requirements'))
+                not_compliant_str = normalize_ticket_requirement_text(ticket_analysis.get('not_compliant_requirements'))
+                requires_further_human_verification = normalize_ticket_requirement_text(
+                    ticket_analysis.get('requires_further_human_verification')
+                )
 
                 if not fully_compliant_str and not not_compliant_str:
                     get_logger().debug(f"Ticket compliance has no requirements",
@@ -450,18 +481,26 @@ def ticket_markdown_logic(emoji, markdown_text, value, gfm_supported) -> str:
             # Set extra statistics outside the ticket loop
             get_settings().set('config.extra_statistics', {'compliance_level': compliance_level})
 
-        # editing table row for ticket compliance analysis
-        if gfm_supported:
-            markdown_text += f"<tr><td>\n\n"
-            markdown_text += f"**{emoji} Ticket compliance analysis {compliance_emoji}**\n\n"
-            markdown_text += ticket_compliance_str
-            markdown_text += f"</td></tr>\n"
-        else:
-            markdown_text += f"### {emoji} Ticket compliance analysis {compliance_emoji}\n\n"
-            markdown_text += ticket_compliance_str + "\n\n"
+    if not ticket_compliance_str and not ticket_note:
+        return markdown_text
+
+    section_body = ticket_compliance_str
+    if ticket_note:
+        section_body = f"{ticket_note}\n\n{section_body}" if section_body else f"{ticket_note}\n\n"
+
+    header_suffix = f" {compliance_emoji}" if compliance_emoji else ''
+
+    # editing table row for ticket compliance analysis
+    if gfm_supported:
+        markdown_text += f"<tr><td>\n\n"
+        markdown_text += f"**{emoji} Ticket compliance analysis{header_suffix}**\n\n"
+        markdown_text += section_body
+        markdown_text += f"</td></tr>\n"
+    else:
+        markdown_text += f"### {emoji} Ticket compliance analysis{header_suffix}\n\n"
+        markdown_text += section_body + "\n\n"
 
     return markdown_text
-
 
 def process_can_be_split(emoji, value):
     try:

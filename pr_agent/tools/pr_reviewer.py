@@ -15,7 +15,8 @@ from pr_agent.algo.pr_processing import (add_ai_metadata_to_diff_files,
 from pr_agent.algo.token_handler import TokenHandler
 from pr_agent.algo.utils import (ModelType, PRReviewHeader,
                                  convert_to_markdown_v2, github_action_output,
-                                 load_yaml, show_relevant_configurations)
+                                 load_yaml, normalize_ticket_requirement_text,
+                                 show_relevant_configurations)
 from pr_agent.config_loader import get_settings
 from pr_agent.git_providers import (get_git_provider,
                                     get_git_provider_with_context)
@@ -23,8 +24,42 @@ from pr_agent.git_providers.git_provider import (IncrementalPR,
                                                  get_main_pr_language)
 from pr_agent.log import get_logger
 from pr_agent.servers.help import HelpMessage
-from pr_agent.tools.ticket_pr_compliance_check import (
-    extract_and_cache_pr_tickets, extract_tickets)
+from pr_agent.tools.ticket_pr_compliance_check import extract_and_cache_pr_tickets
+
+
+def append_ticket_compliance_note(ticket_note: str, extra_note: str) -> str:
+    ticket_note = (ticket_note or "").strip()
+    extra_note = (extra_note or "").strip()
+    if not ticket_note:
+        return extra_note
+    if not extra_note:
+        return ticket_note
+    return f"{ticket_note}\n\n{extra_note}"
+
+
+def build_suspected_ticket_mismatch_note(ticket_compliance_check) -> str:
+    if not isinstance(ticket_compliance_check, list) or not ticket_compliance_check:
+        return ""
+
+    has_not_compliant_requirements = False
+    for ticket_analysis in ticket_compliance_check:
+        if not isinstance(ticket_analysis, dict):
+            continue
+
+        fully_compliant_str = normalize_ticket_requirement_text(ticket_analysis.get("fully_compliant_requirements"))
+        not_compliant_str = normalize_ticket_requirement_text(ticket_analysis.get("not_compliant_requirements"))
+        if fully_compliant_str:
+            return ""
+        if not_compliant_str:
+            has_not_compliant_requirements = True
+
+    if not has_not_compliant_requirements:
+        return ""
+
+    return (
+        "Ticket compliance analysis found no Jira requirements that are clearly implemented by this PR. "
+        "The PR may reference the wrong Jira ticket, or the ticket scope may not match the code changes."
+    )
 
 
 class PRReviewer:
@@ -97,6 +132,7 @@ class PRReviewer:
             "enable_custom_labels": get_settings().config.enable_custom_labels,
             "is_ai_metadata":  get_settings().get("config.enable_ai_metadata", False),
             "related_tickets": get_settings().get('related_tickets', []),
+            "ticket_compliance_note": "",
             'duplicate_prompt_examples': get_settings().config.get('duplicate_prompt_examples', False),
             "date": datetime.datetime.now().strftime('%Y-%m-%d'),
         }
@@ -248,6 +284,11 @@ class PRReviewer:
             key_issues_to_review = data['review'].pop('key_issues_to_review')
             data['review']['key_issues_to_review'] = key_issues_to_review
 
+        ticket_note = append_ticket_compliance_note(
+            self.vars.get("ticket_compliance_note", ""),
+            build_suspected_ticket_mismatch_note(data['review'].get('ticket_compliance_check')),
+        )
+
         incremental_review_markdown_text = None
         # Add incremental review section
         if self.incremental.is_incremental:
@@ -256,9 +297,10 @@ class PRReviewer:
             incremental_review_markdown_text = f"Starting from commit {last_commit_url}"
 
         markdown_text = convert_to_markdown_v2(data, self.git_provider.is_supported("gfm_markdown"),
-                                            incremental_review_markdown_text,
-                                               git_provider=self.git_provider,
-                                               files=self.git_provider.get_diff_files())
+                                             incremental_review_markdown_text,
+                                             git_provider=self.git_provider,
+                                             files=self.git_provider.get_diff_files(),
+                                             ticket_note=ticket_note)
 
         # Add help text if gfm_markdown is supported
         if self.git_provider.is_supported("gfm_markdown") and get_settings().pr_reviewer.enable_help_text:
