@@ -57,7 +57,8 @@ class PRConfig:
         skip_keys = ['ai_disclaimer', 'ai_disclaimer_title', 'ANALYTICS_FOLDER', 'secret_provider', "skip_keys", "app_id", "redirect",
                      'trial_prefix_message', 'no_eligible_message', 'identity_provider', 'ALLOWED_REPOS',
                      'APP_NAME', 'PERSONAL_ACCESS_TOKEN', 'shared_secret', 'key', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'user_token',
-                     'private_key', 'private_key_id', 'client_id', 'client_secret', 'token', 'bearer_token', 'jira_api_token','webhook_secret']
+                     'private_key', 'private_key_id', 'client_id', 'client_secret', 'token', 'bearer_token', 'jira_api_email',
+                     'jira_api_token', 'jira_base_url', 'jira_cloud_id', 'webhook_secret']
         partial_skip_keys = ['key', 'secret', 'token', 'private']
         extra_skip_keys = get_settings().config.get('config.skip_keys', [])
         if extra_skip_keys:
