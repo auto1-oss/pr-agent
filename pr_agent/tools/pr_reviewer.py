@@ -15,7 +15,7 @@ from pr_agent.algo.pr_processing import (add_ai_metadata_to_diff_files,
 from pr_agent.algo.token_handler import TokenHandler
 from pr_agent.algo.utils import (ModelType, PRReviewHeader,
                                  convert_to_markdown_v2, github_action_output,
-                                 load_yaml, normalize_ticket_requirement_text,
+                                 load_yaml, parse_requirement_items,
                                  show_relevant_configurations)
 from pr_agent.config_loader import get_settings
 from pr_agent.git_providers import (get_git_provider,
@@ -46,11 +46,11 @@ def build_suspected_ticket_mismatch_note(ticket_compliance_check) -> str:
         if not isinstance(ticket_analysis, dict):
             continue
 
-        fully_compliant_str = normalize_ticket_requirement_text(ticket_analysis.get("fully_compliant_requirements"))
-        not_compliant_str = normalize_ticket_requirement_text(ticket_analysis.get("not_compliant_requirements"))
-        if fully_compliant_str:
+        fully_compliant_items = parse_requirement_items(ticket_analysis.get("fully_compliant_requirements"))
+        not_compliant_items = parse_requirement_items(ticket_analysis.get("not_compliant_requirements"))
+        if fully_compliant_items:
             return ""
-        if not_compliant_str:
+        if not_compliant_items:
             has_not_compliant_requirements = True
 
     if not has_not_compliant_requirements:

@@ -442,6 +442,7 @@ def _extract_subtasks_as_sub_issues(issue: Dict[str, Any], base_url: str, limit:
                 "ticket_url": _jira_issue_url(base_url, key),
                 "title": summary or key,
                 "body": "",
+                "labels": "",
             }
         )
 

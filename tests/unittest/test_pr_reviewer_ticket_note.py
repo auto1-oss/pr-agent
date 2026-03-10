@@ -80,6 +80,19 @@ def test_build_suspected_ticket_mismatch_note_ignores_none_placeholders():
     assert "wrong Jira ticket" in result
 
 
+def test_build_suspected_ticket_mismatch_note_ignores_none_with_punctuation():
+    result = build_suspected_ticket_mismatch_note(
+        [
+            {
+                "fully_compliant_requirements": "",
+                "not_compliant_requirements": "None.\n",
+            }
+        ]
+    )
+
+    assert result == ""
+
+
 def test_build_suspected_ticket_mismatch_note_skips_non_dict_entries():
     result = build_suspected_ticket_mismatch_note(
         [

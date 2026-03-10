@@ -3,7 +3,9 @@ import copy
 import textwrap
 from unittest.mock import Mock
 
-from pr_agent.algo.utils import PRReviewHeader, convert_to_markdown_v2
+from pr_agent.algo.utils import (PRReviewHeader, convert_to_markdown_v2,
+                                 normalize_ticket_requirement_text,
+                                 parse_requirement_items)
 from pr_agent.tools.pr_description import insert_br_after_x_chars
 
 """
@@ -246,6 +248,50 @@ class TestConvertToMarkdown:
         assert '**🎫 Ticket compliance analysis ❌**' in result
         assert 'Compliant requirements:' not in result
         assert '(none)' not in result
+
+    def test_ticket_compliance_ignores_none_with_punctuation(self):
+        input_data = {'review': {
+            'ticket_compliance_check': [
+                {
+                    'ticket_url': 'https://example.com/ticket/LOG-11264',
+                    'ticket_requirements': '- Requirement 1\n',
+                    'fully_compliant_requirements': '- Requirement 1\n',
+                    'not_compliant_requirements': 'None.\n',
+                    'requires_further_human_verification': '- No information provided.\n',
+                }
+            ]
+        }}
+
+        result = convert_to_markdown_v2(input_data)
+
+        assert '**🎫 Ticket compliance analysis ✅**' in result
+        assert '**[LOG-11264](https://example.com/ticket/LOG-11264) - Fully compliant**' in result
+        assert 'Compliant requirements:' in result
+        assert 'Non-compliant requirements:' not in result
+        assert 'Requires further human verification:' not in result
+        assert 'None.' not in result
+        assert 'No information provided.' not in result
+
+    def test_parse_requirement_items_filters_placeholder_variants(self):
+        items = parse_requirement_items(
+            '- Requirement 1\n'
+            '• None.\n'
+            '1. N/A:\n'
+            '[ ] No information provided.\n'
+            '- Requirement 2\n'
+        )
+
+        assert items == ['- Requirement 1', '- Requirement 2']
+
+    def test_normalize_ticket_requirement_text_joins_filtered_items(self):
+        normalized = normalize_ticket_requirement_text(
+            '- Requirement 1\n'
+            '-\n'
+            '* None.\n'
+            '2) Requirement 2\n'
+        )
+
+        assert normalized == '- Requirement 1\n2) Requirement 2'
 
     def test_convert_to_markdown_does_not_mutate_review_input(self):
         input_data = {'review': {

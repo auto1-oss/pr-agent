@@ -379,18 +379,38 @@ def extract_relevant_lines_str(end_line, files, relevant_file, start_line, deden
         return ""
 
 
-def normalize_ticket_requirement_text(text: str) -> str:
-    text = (text or '').strip()
+_PLACEHOLDER_REQUIREMENT_ITEMS = frozenset({
+    "", "-", "*", "none", "(none)", "n/a", "(n/a)", "na", "(na)",
+    "no information", "no information provided", "none provided", "not applicable",
+})
+_REQUIREMENT_ITEM_PREFIX_RE = re.compile(r"^(?:[-*•]+|\d+[.)]|\[[ xX]\])\s*")
+
+
+def _canonicalize_requirement_item(line: str) -> str:
+    canonical_line = (line or "").strip()
+    while canonical_line:
+        updated_line = _REQUIREMENT_ITEM_PREFIX_RE.sub("", canonical_line, count=1).strip()
+        if updated_line == canonical_line:
+            break
+        canonical_line = updated_line
+    return canonical_line.lower().rstrip(".:;!,")
+
+
+def is_placeholder_requirement_item(line: str) -> bool:
+    return _canonicalize_requirement_item(line) in _PLACEHOLDER_REQUIREMENT_ITEMS
+
+
+def parse_requirement_items(text: str) -> list[str]:
+    text = (text or "").strip()
     if not text:
-        return ''
+        return []
 
-    normalized_lines = [line.strip() for line in text.splitlines() if line.strip()]
-    placeholder_lines = {'-', '*', 'none', '(none)', 'n/a', '(n/a)'}
-    normalized_lines = [line for line in normalized_lines if line.lower() not in placeholder_lines]
-    if not normalized_lines:
-        return ''
+    requirement_items = [line.strip() for line in text.splitlines() if line.strip()]
+    return [item for item in requirement_items if not is_placeholder_requirement_item(item)]
 
-    return '\n'.join(normalized_lines)
+
+def normalize_ticket_requirement_text(text: str) -> str:
+    return '\n'.join(parse_requirement_items(text))
 
 
 def ticket_markdown_logic(emoji, markdown_text, value, gfm_supported, ticket_note: str = '') -> str:
@@ -408,27 +428,30 @@ def ticket_markdown_logic(emoji, markdown_text, value, gfm_supported, ticket_not
                 ticket_url = ticket_analysis.get('ticket_url', '').strip()
                 explanation = ''
                 ticket_compliance_level = ''  # Individual ticket compliance
-                fully_compliant_str = normalize_ticket_requirement_text(ticket_analysis.get('fully_compliant_requirements'))
-                not_compliant_str = normalize_ticket_requirement_text(ticket_analysis.get('not_compliant_requirements'))
-                requires_further_human_verification = normalize_ticket_requirement_text(
+                fully_compliant_items = parse_requirement_items(ticket_analysis.get('fully_compliant_requirements'))
+                not_compliant_items = parse_requirement_items(ticket_analysis.get('not_compliant_requirements'))
+                requires_further_human_verification_items = parse_requirement_items(
                     ticket_analysis.get('requires_further_human_verification')
                 )
+                fully_compliant_str = '\n'.join(fully_compliant_items)
+                not_compliant_str = '\n'.join(not_compliant_items)
+                requires_further_human_verification = '\n'.join(requires_further_human_verification_items)
 
-                if not fully_compliant_str and not not_compliant_str:
+                if not fully_compliant_items and not not_compliant_items:
                     get_logger().debug(f"Ticket compliance has no requirements",
                                        artifact={'ticket_url': ticket_url})
                     continue
 
                 # Calculate individual ticket compliance level
-                if fully_compliant_str:
-                    if not_compliant_str:
+                if fully_compliant_items:
+                    if not_compliant_items:
                         ticket_compliance_level = 'Partially compliant'
                     else:
-                        if not requires_further_human_verification:
+                        if not requires_further_human_verification_items:
                             ticket_compliance_level = 'Fully compliant'
                         else:
                             ticket_compliance_level = 'PR Code Verified'
-                elif not_compliant_str:
+                elif not_compliant_items:
                     ticket_compliance_level = 'Not compliant'
 
                 # Store the compliance level for aggregation
@@ -436,20 +459,20 @@ def ticket_markdown_logic(emoji, markdown_text, value, gfm_supported, ticket_not
                     all_compliance_levels.append(ticket_compliance_level)
 
                 # build compliance string
-                if fully_compliant_str:
+                if fully_compliant_items:
                     explanation += f"Compliant requirements:\n\n{fully_compliant_str}\n\n"
-                if not_compliant_str:
+                if not_compliant_items:
                     explanation += f"Non-compliant requirements:\n\n{not_compliant_str}\n\n"
-                if requires_further_human_verification:
+                if requires_further_human_verification_items:
                     explanation += f"Requires further human verification:\n\n{requires_further_human_verification}\n\n"
                 ticket_compliance_str += f"\n\n**[{ticket_url.split('/')[-1]}]({ticket_url}) - {ticket_compliance_level}**\n\n{explanation}\n\n"
 
                 # for debugging
-                if requires_further_human_verification:
+                if requires_further_human_verification_items:
                     get_logger().debug(f"Ticket compliance requires further human verification",
                                        artifact={'ticket_url': ticket_url,
-                                                 'requires_further_human_verification': requires_further_human_verification,
-                                                 'compliance_level': ticket_compliance_level})
+                                                  'requires_further_human_verification': requires_further_human_verification,
+                                                  'compliance_level': ticket_compliance_level})
 
             except Exception as e:
                 get_logger().exception(f"Failed to process ticket compliance: {e}")

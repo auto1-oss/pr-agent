@@ -12,6 +12,58 @@ GITHUB_TICKET_PATTERN = re.compile(
      r'(https://github[^/]+/[^/]+/[^/]+/issues/\d+)|(\b(\w+)/(\w+)#(\d+)\b)|(#\d+)'
 )
 
+TICKET_PROMPT_FIELDS = ("ticket_id", "ticket_url", "title", "body", "labels", "requirements")
+
+
+def _normalize_ticket_value(value):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple, set)):
+        return ", ".join(str(item) for item in value if item is not None)
+    return str(value)
+
+
+def _normalize_ticket_for_prompt(ticket):
+    ticket = ticket if isinstance(ticket, dict) else {}
+    normalized_ticket = {
+        field: _normalize_ticket_value(ticket.get(field, "")) for field in TICKET_PROMPT_FIELDS
+    }
+
+    sub_issues = ticket.get("sub_issues")
+    if isinstance(sub_issues, list):
+        normalized_sub_issues = []
+        for sub_issue in sub_issues:
+            normalized_sub_issue = _normalize_ticket_for_prompt(sub_issue)
+            if _ticket_has_prompt_content(normalized_sub_issue):
+                normalized_sub_issues.append(normalized_sub_issue)
+        if normalized_sub_issues:
+            normalized_ticket["sub_issues"] = normalized_sub_issues
+
+    return normalized_ticket
+
+
+def _ticket_has_prompt_content(ticket):
+    return any(ticket.get(field) for field in TICKET_PROMPT_FIELDS)
+
+
+def _extract_related_tickets_for_prompt(tickets):
+    related_tickets = []
+    for ticket in tickets or []:
+        normalized_ticket = _normalize_ticket_for_prompt(ticket)
+        for sub_issue in normalized_ticket.get("sub_issues", []):
+            prompt_sub_issue = {field: sub_issue.get(field, "") for field in TICKET_PROMPT_FIELDS}
+            if _ticket_has_prompt_content(prompt_sub_issue):
+                related_tickets.append(prompt_sub_issue)
+
+        prompt_ticket = {field: normalized_ticket.get(field, "") for field in TICKET_PROMPT_FIELDS}
+        if _ticket_has_prompt_content(prompt_ticket):
+            related_tickets.append(prompt_ticket)
+
+    return related_tickets
+
+
 def find_jira_tickets(text):
     # Regular expression patterns for JIRA tickets
     patterns = [
@@ -124,7 +176,8 @@ async def extract_tickets(git_provider) -> tuple[list | None, str]:
                                 sub_issues_content.append({
                                     'ticket_url': sub_issue_url,
                                     'title': sub_issue.title,
-                                    'body': sub_body
+                                    'body': sub_body,
+                                    'labels': "",
                                 })
                             except Exception as e:
                                 get_logger().warning(f"Failed to fetch sub-issue content for {sub_issue_url}: {e}")
@@ -191,6 +244,7 @@ async def extract_and_cache_pr_tickets(git_provider, vars):
     if not get_settings().get('pr_reviewer.require_ticket_analysis_review', False):
         return
 
+    vars['related_tickets'] = []
     vars['ticket_compliance_note'] = ""
 
     related_tickets = get_settings().get('related_tickets', [])
@@ -203,13 +257,7 @@ async def extract_and_cache_pr_tickets(git_provider, vars):
         get_settings().set('ticket_compliance_note', vars['ticket_compliance_note'])
 
         if tickets_content:
-            # Store sub-issues along with main issues
-            for ticket in tickets_content:
-                if "sub_issues" in ticket and ticket["sub_issues"]:
-                    for sub_issue in ticket["sub_issues"]:
-                        related_tickets.append(sub_issue)  # Add sub-issues content
-
-                related_tickets.append(ticket)
+            related_tickets = _extract_related_tickets_for_prompt(tickets_content)
 
             get_logger().info("Extracted tickets and sub-issues from PR description",
                               artifact={"tickets": related_tickets})
@@ -217,8 +265,10 @@ async def extract_and_cache_pr_tickets(git_provider, vars):
             vars['related_tickets'] = related_tickets
             get_settings().set('related_tickets', related_tickets)
     else:
+        related_tickets = _extract_related_tickets_for_prompt(related_tickets)
         get_logger().info("Using cached tickets", artifact={"tickets": related_tickets})
         vars['related_tickets'] = related_tickets
+        get_settings().set('related_tickets', related_tickets)
         vars['ticket_compliance_note'] = cached_ticket_compliance_note or ''
 
 
