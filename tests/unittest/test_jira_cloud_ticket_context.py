@@ -106,6 +106,7 @@ class TestJiraCloudFetch:
         assert ticket["sub_issues"][0]["ticket_url"] == "https://example.atlassian.net/browse/SUB-2"
         assert ticket["sub_issues"][0]["title"] == "Subtask 1"
         assert ticket["sub_issues"][0]["body"] == ""
+        assert ticket["sub_issues"][0]["labels"] == ""
 
     def test_fetch_jira_ticket_context_uses_scoped_token_with_cloud_id(self, monkeypatch):
         monkeypatch.setenv("JIRA_BASE_URL", "https://example.atlassian.net")

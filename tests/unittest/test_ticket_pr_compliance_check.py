@@ -1,5 +1,7 @@
 import asyncio
 
+from jinja2 import Environment, StrictUndefined
+
 from pr_agent.config_loader import get_settings
 from pr_agent.tools import ticket_pr_compliance_check
 
@@ -11,6 +13,23 @@ class FakeGitProvider:
 
     def get_pr_branch(self):
         return self._branch
+
+
+def _render_pr_description_prompt(related_tickets):
+    return Environment(undefined=StrictUndefined).from_string(get_settings().pr_description_prompt.user).render(
+        {
+            "related_tickets": related_tickets,
+            "title": "",
+            "description": "",
+            "branch": "",
+            "commit_messages_str": "",
+            "diff": "",
+            "enable_pr_diagram": False,
+            "enable_semantic_files_types": False,
+            "include_file_summary_changes": False,
+            "duplicate_prompt_examples": False,
+        }
+    )
 
 
 def test_extract_tickets_prefers_title_ticket_on_mismatch(monkeypatch):
@@ -69,7 +88,7 @@ def test_extract_and_cache_pr_tickets_preserves_cached_ticket_note(monkeypatch):
 
     try:
         settings.set("pr_reviewer.require_ticket_analysis_review", True)
-        settings.set("related_tickets", [])
+        settings.set("related_tickets", None)
         settings.set("ticket_compliance_note", "")
 
         first_vars = {}
@@ -156,3 +175,86 @@ def test_extract_tickets_preserves_title_failure_note_on_mismatch(monkeypatch):
     assert "MOCK-5678" in note
     assert "not found" in note
     assert note.count("PR title references Jira ticket") == 1
+
+
+def test_extract_and_cache_pr_tickets_normalizes_sub_issues_for_prompt_rendering(monkeypatch):
+    async def fake_extract_tickets(_git_provider):
+        return (
+            [
+                {
+                    "ticket_id": "FAKE-5678",
+                    "ticket_url": "https://example.com/FAKE-5678",
+                    "title": "Parent ticket",
+                    "body": "",
+                    "sub_issues": [{"ticket_url": "https://example.com/FAKE-5679", "title": "Child ticket", "body": ""}],
+                }
+            ],
+            "cached note",
+        )
+
+    monkeypatch.setattr(ticket_pr_compliance_check, "extract_tickets", fake_extract_tickets)
+
+    settings = get_settings()
+    previous_require_ticket_analysis = settings.get("pr_reviewer.require_ticket_analysis_review", False)
+    previous_related_tickets = settings.get("related_tickets", [])
+    previous_ticket_note = settings.get("ticket_compliance_note", "")
+
+    try:
+        settings.set("pr_reviewer.require_ticket_analysis_review", True)
+        settings.set("related_tickets", None)
+        settings.set("ticket_compliance_note", "")
+
+        vars = {}
+        asyncio.run(ticket_pr_compliance_check.extract_and_cache_pr_tickets(object(), vars))
+
+        assert vars["related_tickets"] == [
+            {
+                "ticket_id": "",
+                "ticket_url": "https://example.com/FAKE-5679",
+                "title": "Child ticket",
+                "body": "",
+                "labels": "",
+                "requirements": "",
+            },
+            {
+                "ticket_id": "FAKE-5678",
+                "ticket_url": "https://example.com/FAKE-5678",
+                "title": "Parent ticket",
+                "body": "",
+                "labels": "",
+                "requirements": "",
+            },
+        ]
+        assert _render_pr_description_prompt(vars["related_tickets"])
+    finally:
+        settings.set("pr_reviewer.require_ticket_analysis_review", previous_require_ticket_analysis)
+        settings.set("related_tickets", previous_related_tickets)
+        settings.set("ticket_compliance_note", previous_ticket_note)
+
+
+def test_extract_and_cache_pr_tickets_skips_empty_tickets(monkeypatch):
+    async def fake_extract_tickets(_git_provider):
+        return ([{}, {"sub_issues": [{}]}], "cached note")
+
+    monkeypatch.setattr(ticket_pr_compliance_check, "extract_tickets", fake_extract_tickets)
+
+    settings = get_settings()
+    previous_require_ticket_analysis = settings.get("pr_reviewer.require_ticket_analysis_review", False)
+    previous_related_tickets = settings.get("related_tickets", [])
+    previous_ticket_note = settings.get("ticket_compliance_note", "")
+
+    try:
+        settings.set("pr_reviewer.require_ticket_analysis_review", True)
+        settings.set("related_tickets", None)
+        settings.set("ticket_compliance_note", "")
+
+        vars = {}
+        asyncio.run(ticket_pr_compliance_check.extract_and_cache_pr_tickets(object(), vars))
+
+        assert vars["related_tickets"] == []
+        assert vars["ticket_compliance_note"] == "cached note"
+        assert _render_pr_description_prompt(vars["related_tickets"])
+    finally:
+        settings.set("pr_reviewer.require_ticket_analysis_review", previous_require_ticket_analysis)
+        settings.set("related_tickets", previous_related_tickets)
+        settings.set("ticket_compliance_note", previous_ticket_note)
