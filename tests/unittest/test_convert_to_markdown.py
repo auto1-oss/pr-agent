@@ -272,6 +272,44 @@ class TestConvertToMarkdown:
         assert 'None.' not in result
         assert 'No information provided.' not in result
 
+    def test_ticket_compliance_renders_human_verification_only_entries(self):
+        input_data = {'review': {
+            'ticket_compliance_check': [
+                {
+                    'ticket_url': 'https://example.com/ticket/OPS-24224',
+                    'ticket_requirements': '- Verify rollout in QA\n',
+                    'fully_compliant_requirements': '',
+                    'not_compliant_requirements': '',
+                    'requires_further_human_verification': '- Verify rollout in QA\n',
+                }
+            ]
+        }}
+
+        result = convert_to_markdown_v2(input_data)
+
+        assert '**🎫 Ticket compliance analysis**' in result
+        assert '**🎫 Ticket compliance analysis ✅**' not in result
+        assert '**🎫 Ticket compliance analysis ❌**' not in result
+        assert '**[OPS-24224](https://example.com/ticket/OPS-24224) - Requires human verification**' in result
+        assert 'Requires further human verification:' in result
+
+    def test_ticket_compliance_omits_placeholder_only_human_verification_entries(self):
+        input_data = {'review': {
+            'ticket_compliance_check': [
+                {
+                    'ticket_url': 'https://example.com/ticket/OPS-24224',
+                    'ticket_requirements': '',
+                    'fully_compliant_requirements': '',
+                    'not_compliant_requirements': '',
+                    'requires_further_human_verification': '- No information provided.\n',
+                }
+            ]
+        }}
+
+        result = convert_to_markdown_v2(input_data)
+
+        assert 'Ticket compliance analysis' not in result
+
     def test_parse_requirement_items_filters_placeholder_variants(self):
         items = parse_requirement_items(
             '- Requirement 1\n'

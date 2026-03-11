@@ -437,7 +437,7 @@ def ticket_markdown_logic(emoji, markdown_text, value, gfm_supported, ticket_not
                 not_compliant_str = '\n'.join(not_compliant_items)
                 requires_further_human_verification = '\n'.join(requires_further_human_verification_items)
 
-                if not fully_compliant_items and not not_compliant_items:
+                if not fully_compliant_items and not not_compliant_items and not requires_further_human_verification_items:
                     get_logger().debug(f"Ticket compliance has no requirements",
                                        artifact={'ticket_url': ticket_url})
                     continue
@@ -453,9 +453,11 @@ def ticket_markdown_logic(emoji, markdown_text, value, gfm_supported, ticket_not
                             ticket_compliance_level = 'PR Code Verified'
                 elif not_compliant_items:
                     ticket_compliance_level = 'Not compliant'
+                elif requires_further_human_verification_items:
+                    ticket_compliance_level = 'Requires human verification'
 
                 # Store the compliance level for aggregation
-                if ticket_compliance_level:
+                if ticket_compliance_level and ticket_compliance_level != 'Requires human verification':
                     all_compliance_levels.append(ticket_compliance_level)
 
                 # build compliance string
