@@ -83,8 +83,6 @@ def get_setting(key: str) -> Any:
         return context.get("settings", global_settings).get(key, global_settings.get(key, None))
     except Exception:
         return global_settings.get(key, None)
-
-
 def emphasize_header(text: str, only_markdown=False, reference_link=None) -> str:
     try:
         # Finding the position of the first occurrence of ": "
@@ -130,7 +128,8 @@ def convert_to_markdown_v2(output_data: dict,
                            incremental_review=None,
                            git_provider=None,
                            files=None,
-                           ticket_note: str = '') -> str:
+                           ticket_note: str = '',
+                           findings_metadata_badges: bool | None = None) -> str:
     """
     Convert a dictionary of data into markdown format.
     Args:
@@ -138,6 +137,9 @@ def convert_to_markdown_v2(output_data: dict,
     Returns:
         str: The markdown formatted text generated from the input dictionary.
     """
+
+    if findings_metadata_badges is None:
+        findings_metadata_badges = get_settings().pr_reviewer.get("findings_metadata_badges", False)
 
     emojis = {
         "Can be split": "🔀",
@@ -287,6 +289,16 @@ def convert_to_markdown_v2(output_data: dict,
                         if issue_header.lower() == 'possible bug':
                             issue_header = 'Possible Issue'  # Make the header less frightening
                         issue_content = issue.get('issue_content', '').strip()
+                        issue_metadata = format_review_issue_metadata(
+                            issue,
+                            gfm_supported,
+                            findings_metadata_badges,
+                        )
+                        if issue_metadata:
+                            if gfm_supported:
+                                issue_content = f"{issue_metadata}<br>{issue_content}" if issue_content else issue_metadata
+                            else:
+                                issue_content = f"{issue_metadata}\n\n{issue_content}" if issue_content else issue_metadata
                         start_line = int(str(issue.get('start_line', 0)).strip())
                         end_line = int(str(issue.get('end_line', 0)).strip())
 
@@ -338,6 +350,52 @@ def convert_to_markdown_v2(output_data: dict,
         markdown_text += "</table>\n"
 
     return markdown_text
+
+
+def format_review_issue_metadata(issue: dict, gfm_supported: bool, enable_badges: bool = False) -> str:
+    if not isinstance(issue, dict):
+        return ""
+    if not enable_badges:
+        return ""
+
+    metadata_labels = []
+    confidence = str(issue.get("confidence", "")).strip().lower()
+    if confidence in {"high", "medium", "low"}:
+        metadata_labels.append(f"{confidence.capitalize()} confidence")
+
+    evidence_type = str(issue.get("evidence_type", "")).strip().lower()
+    evidence_labels = {
+        "diff": "Diff evidence",
+        "ticket": "Ticket evidence",
+        "inferred": "Inferred evidence",
+    }
+    if evidence_type in evidence_labels:
+        metadata_labels.append(evidence_labels[evidence_type])
+
+    if not metadata_labels:
+        return ""
+
+    if gfm_supported:
+        return " ".join([f"<code>{label}</code>" for label in metadata_labels])
+    return " ".join([f"`{label}`" for label in metadata_labels])
+
+
+def format_code_suggestion_metadata(label: str, score=None, enable_badges: bool | None = None) -> str:
+    if enable_badges is None:
+        enable_badges = get_settings().pr_reviewer.get("findings_metadata_badges", False)
+    if not enable_badges:
+        return ""
+
+    label = str(label).strip()
+    if not label:
+        return ""
+
+    score_value = "" if score is None else str(score).strip()
+    if score_value:
+        return f" [{label}, importance: {score_value}]"
+
+    return f" [{label}]"
+
 
 def extract_relevant_lines_str(end_line, files, relevant_file, start_line, dedent=False) -> str:
     """

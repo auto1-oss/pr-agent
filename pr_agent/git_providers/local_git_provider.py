@@ -63,6 +63,9 @@ class LocalGitProvider(GitProvider):
         return True
 
     def get_diff_files(self) -> list[FilePatchInfo]:
+        if self.diff_files is not None:
+            return self.diff_files
+
         diffs = self.repo.head.commit.diff(
             self.repo.merge_base(self.repo.head, self.repo.branches[self.target_branch_name]),
             create_patch=True,
