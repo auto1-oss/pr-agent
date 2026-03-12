@@ -18,8 +18,11 @@ from pr_agent.algo.pr_processing import (add_ai_metadata_to_diff_files,
                                          get_pr_diff, get_pr_multi_diffs,
                                          retry_with_fallback_models)
 from pr_agent.algo.token_handler import TokenHandler
-from pr_agent.algo.utils import (ModelType, load_yaml, replace_code_tags,
-                                 show_relevant_configurations, get_max_tokens, clip_tokens, get_model)
+from pr_agent.algo.utils import (ModelType, clip_tokens,
+                                  format_code_suggestion_metadata, get_max_tokens,
+                                  get_model, load_yaml,
+                                  replace_code_tags,
+                                  show_relevant_configurations)
 from pr_agent.config_loader import get_settings
 from pr_agent.git_providers import (AzureDevopsProvider, GithubProvider,
                                     GitLabProvider, get_git_provider,
@@ -547,6 +550,8 @@ class PRCodeSuggestions:
             else:
                 return self.git_provider.publish_comment('No suggestions found to improve this PR.')
 
+        findings_metadata_badges = get_settings().pr_reviewer.get("findings_metadata_badges", False)
+
         for d in data['code_suggestions']:
             try:
                 if get_settings().config.verbosity_level >= 2:
@@ -561,10 +566,12 @@ class PRCodeSuggestions:
                 if new_code_snippet:
                     new_code_snippet = self.dedent_code(relevant_file, relevant_lines_start, new_code_snippet)
 
-                if d.get('score'):
-                    body = f"**Suggestion:** {content} [{label}, importance: {d.get('score')}]\n```suggestion\n" + new_code_snippet + "\n```"
-                else:
-                    body = f"**Suggestion:** {content} [{label}]\n```suggestion\n" + new_code_snippet + "\n```"
+                suggestion_metadata = format_code_suggestion_metadata(
+                    label,
+                    d.get('score'),
+                    enable_badges=findings_metadata_badges,
+                )
+                body = f"**Suggestion:** {content}{suggestion_metadata}\n```suggestion\n" + new_code_snippet + "\n```"
                 code_suggestions.append({'body': body, 'relevant_file': relevant_file,
                                          'relevant_lines_start': relevant_lines_start,
                                          'relevant_lines_end': relevant_lines_end,

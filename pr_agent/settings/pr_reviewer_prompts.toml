@@ -46,6 +46,13 @@ __new hunk__
 - When quoting variables, names or file paths from the code, use backticks (`) instead of single quote (').
 - Note that you only see changed code segments (diff hunks in a PR), not the entire codebase. Avoid suggestions that might duplicate existing functionality or questioning code elements (like variables declarations or import statements) that may be defined elsewhere in the codebase.
 - Also note that if the code ends at an opening brace or statement that begins a new scope (like 'if', 'for', 'try'), don't treat it as incomplete. Instead, acknowledge the visible scope boundary and analyze only the code shown.
+{%- if small_file_context %}
+- Some files may include a `## Full file context:` section with the complete post-change contents of a small touched file. Use this only to validate issues related to the changed file, and do not report issues from untouched regions unless they are necessary to explain a defect introduced by the PR.
+{%- endif %}
+{%- if findings_metadata %}
+- For each issue, set `confidence` from `high`, `medium`, or `low` based only on the visible evidence.
+- Set `evidence_type` to `diff` when changed lines directly support the issue, `ticket` for a clear ticket mismatch, or `inferred` when the issue depends on indirect clues.
+{%- endif %}
 
 {%- if extra_instructions %}
 
@@ -69,6 +76,10 @@ class KeyIssuesComponentLink(BaseModel):
     relevant_file: str = Field(description="The full file path of the relevant file")
     issue_header: str = Field(description="One or two word title for the issue. For example: 'Possible Bug', etc.")
     issue_content: str = Field(description="A short and concise summary of what should be further inspected and validated during the PR review process for this issue. Do not mention line numbers in this field.")
+{%- if findings_metadata %}
+    confidence: str = Field(description="Your confidence in this issue based only on the visible evidence. Allowed values: high, medium, low")
+    evidence_type: str = Field(description="What directly supports this issue. Allowed values: diff, ticket, inferred")
+{%- endif %}
     start_line: int = Field(description="The start line that corresponds to this issue in the relevant file")
     end_line: int = Field(description="The end line that corresponds to this issue in the relevant file")
 
@@ -164,6 +175,12 @@ review:
         Possible Bug
       issue_content: |
         ...
+{%- if findings_metadata %}
+      confidence: |
+        high
+      evidence_type: |
+        diff
+{%- endif %}
       start_line: 12
       end_line: 14
     - ...
@@ -302,6 +319,12 @@ review:
         ...
       issue_content: |
         ...
+{%- if findings_metadata %}
+      confidence: |
+        high
+      evidence_type: |
+        diff
+{%- endif %}
       start_line: ...
       end_line: ...
     - ...

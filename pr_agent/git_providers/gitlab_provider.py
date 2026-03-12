@@ -16,6 +16,7 @@ from ..algo.file_filter import filter_ignored
 from ..algo.git_patch_processing import decode_if_bytes
 from ..algo.language_handler import is_valid_file
 from ..algo.utils import (clip_tokens,
+                          format_code_suggestion_metadata,
                           find_line_number_of_relevant_line_in_file,
                           load_large_diff)
 from ..config_loader import get_settings
@@ -606,7 +607,13 @@ class GitLabProvider(GitProvider):
                     else:
                         language = ''
                     link = self.get_line_link(relevant_file, line_start, line_end)
-                    body_fallback =f"**Suggestion:** {content} [{label}, importance: {score}]\n\n"
+                    findings_metadata_badges = get_settings().pr_reviewer.get("findings_metadata_badges", False)
+                    suggestion_metadata = format_code_suggestion_metadata(
+                        label,
+                        score,
+                        enable_badges=findings_metadata_badges,
+                    )
+                    body_fallback = f"**Suggestion:** {content}{suggestion_metadata}\n\n"
                     body_fallback +=f"\n\n<details><summary>[{target_file.filename} [{line_start}-{line_end}]]({link}):</summary>\n\n"
                     body_fallback += f"\n\n___\n\n`(Cannot implement directly - GitLab API allows committable suggestions strictly on MR diff lines)`"
                     body_fallback+="</details>\n\n"

@@ -126,6 +126,78 @@ class TestConvertToMarkdown:
         assert convert_to_markdown_v2(input_data, git_provider=mock_git_provider).strip() == expected_output.strip()
         mock_git_provider.get_line_link.assert_called_with('src/utils.py', 30, 50)
 
+    def test_key_issues_to_review_hides_metadata_badges_by_default(self):
+        input_data = {'review': {
+            'key_issues_to_review': [
+                {
+                    'relevant_file': 'src/utils.py',
+                    'issue_header': 'Code Smell',
+                    'issue_content': 'The function is too long and complex.',
+                    'confidence': 'high',
+                    'evidence_type': 'diff',
+                    'start_line': 30,
+                    'end_line': 50,
+                }
+            ]
+        }}
+        mock_git_provider = Mock()
+        mock_git_provider.get_line_link.return_value = ''
+
+        result = convert_to_markdown_v2(input_data, git_provider=mock_git_provider)
+
+        assert 'High confidence' not in result
+        assert 'Diff evidence' not in result
+        assert 'The function is too long and complex.' in result
+
+    def test_key_issues_to_review_renders_metadata_badges_when_enabled(self):
+        input_data = {'review': {
+            'key_issues_to_review': [
+                {
+                    'relevant_file': 'src/utils.py',
+                    'issue_header': 'Code Smell',
+                    'issue_content': 'The function is too long and complex.',
+                    'confidence': 'high',
+                    'evidence_type': 'diff',
+                    'start_line': 30,
+                    'end_line': 50,
+                }
+            ]
+        }}
+
+        mock_git_provider = Mock()
+        mock_git_provider.get_line_link.return_value = ''
+
+        result = convert_to_markdown_v2(
+            input_data,
+            git_provider=mock_git_provider,
+            findings_metadata_badges=True,
+        )
+
+        assert '<code>High confidence</code> <code>Diff evidence</code><br>The function is too long and complex.' in result
+
+    def test_key_issues_to_review_renders_metadata_badges_without_gfm_when_enabled(self):
+        input_data = {'review': {
+            'key_issues_to_review': [
+                {
+                    'relevant_file': 'src/utils.py',
+                    'issue_header': 'Code Smell',
+                    'issue_content': 'The function is too long and complex.',
+                    'confidence': 'medium',
+                    'evidence_type': 'ticket',
+                    'start_line': 30,
+                    'end_line': 50,
+                }
+            ]
+        }}
+
+        result = convert_to_markdown_v2(
+            input_data,
+            gfm_supported=False,
+            findings_metadata_badges=True,
+        )
+
+        assert '`Medium confidence` `Ticket evidence`' in result
+
     def test_ticket_compliance(self):
         input_data = {'review': {
             'ticket_compliance_check': [

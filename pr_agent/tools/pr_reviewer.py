@@ -9,12 +9,16 @@ from jinja2 import Environment, StrictUndefined
 
 from pr_agent.algo.ai_handlers.base_ai_handler import BaseAiHandler
 from pr_agent.algo.ai_handlers.litellm_ai_handler import LiteLLMAIHandler
+from pr_agent.algo.context_enrichment import append_small_file_context_to_diff
 from pr_agent.algo.pr_processing import (add_ai_metadata_to_diff_files,
+                                         OUTPUT_BUFFER_TOKENS_SOFT_THRESHOLD,
                                          get_pr_diff,
                                          retry_with_fallback_models)
+from pr_agent.algo.review_output_filter import normalize_review_output
 from pr_agent.algo.token_handler import TokenHandler
 from pr_agent.algo.utils import (ModelType, PRReviewHeader,
-                                 convert_to_markdown_v2, github_action_output,
+                                 convert_to_markdown_v2, get_max_tokens,
+                                 github_action_output,
                                  load_yaml, parse_requirement_items,
                                  show_relevant_configurations)
 from pr_agent.config_loader import get_settings
@@ -25,6 +29,9 @@ from pr_agent.git_providers.git_provider import (IncrementalPR,
 from pr_agent.log import get_logger
 from pr_agent.servers.help import HelpMessage
 from pr_agent.tools.ticket_pr_compliance_check import extract_and_cache_pr_tickets
+
+
+SMALL_FILE_CONTEXT_PROMPT_OVERHEAD_TOKENS = 64
 
 
 def append_ticket_compliance_note(ticket_note: str, extra_note: str) -> str:
@@ -109,6 +116,9 @@ class PRReviewer:
             get_settings().set("config.enable_ai_metadata", False)
             get_logger().debug(f"AI metadata is disabled for this command")
 
+        self.findings_metadata = get_settings().pr_reviewer.get("findings_metadata", False)
+        self.small_file_context = get_settings().pr_reviewer.get("small_file_context", False)
+
         self.vars = {
             "title": self.git_provider.pr.title,
             "branch": self.git_provider.get_pr_branch(),
@@ -130,6 +140,8 @@ class PRReviewer:
             "commit_messages_str": self.git_provider.get_commit_messages(),
             "custom_labels": "",
             "enable_custom_labels": get_settings().config.enable_custom_labels,
+            "findings_metadata": self.findings_metadata,
+            "small_file_context": self.small_file_context,
             "is_ai_metadata":  get_settings().get("config.enable_ai_metadata", False),
             "related_tickets": get_settings().get('related_tickets', []),
             "ticket_compliance_note": "",
@@ -228,6 +240,7 @@ class PRReviewer:
                                         model,
                                         add_line_numbers_to_hunks=True,
                                         disable_extra_lines=False,)
+        self.patches_diff = self._append_small_file_context(self.patches_diff, model)
 
         if self.patches_diff:
             get_logger().debug(f"PR diff", diff=self.patches_diff)
@@ -273,11 +286,18 @@ class PRReviewer:
                          keys_fix_yaml=["ticket_compliance_check", "estimated_effort_to_review_[1-5]:", "security_concerns:", "key_issues_to_review:",
                                         "relevant_file:", "relevant_line:", "suggestion:"],
                          first_key=first_key, last_key=last_key)
-        github_action_output(data, 'review')
 
         if 'review' not in data:
             get_logger().exception("Failed to parse review data", artifact={"data": data})
             return ""
+
+        data = normalize_review_output(
+            data,
+            max_findings=get_settings().pr_reviewer.num_max_findings,
+            findings_metadata=self.findings_metadata,
+            filter_mode=get_settings().pr_reviewer.get("findings_filter_mode", "off"),
+        )
+        github_action_output(data, 'review')
 
         # move data['review'] 'key_issues_to_review' key to the end of the dictionary
         if 'key_issues_to_review' in data['review']:
@@ -319,6 +339,36 @@ class PRReviewer:
             markdown_text = ""
 
         return markdown_text
+
+    def _append_small_file_context(self, diff_text: str, model: str) -> str:
+        if not diff_text or not self.small_file_context:
+            return diff_text
+
+        max_context_lines = int(get_settings().pr_reviewer.get("small_file_context_max_lines", 0))
+        max_context_tokens = int(get_settings().pr_reviewer.get("small_file_context_max_tokens", 0))
+        if max_context_lines <= 0 or max_context_tokens <= 0:
+            return diff_text
+
+        diff_tokens = self.token_handler.count_tokens(diff_text)
+        # prompt_tokens is computed before the runtime diff is rendered into the prompt, so account for diff tokens here.
+        available_tokens = (
+            get_max_tokens(model)
+            - OUTPUT_BUFFER_TOKENS_SOFT_THRESHOLD
+            - self.token_handler.prompt_tokens
+            - diff_tokens
+            - SMALL_FILE_CONTEXT_PROMPT_OVERHEAD_TOKENS
+        )
+        if available_tokens <= 0:
+            return diff_text
+
+        enriched_diff = append_small_file_context_to_diff(
+            diff_text,
+            self.git_provider.get_diff_files(),
+            self.token_handler,
+            max_lines=max_context_lines,
+            max_tokens=min(max_context_tokens, available_tokens),
+        )
+        return enriched_diff
 
     def _get_user_answers(self) -> Tuple[str, str]:
         """
