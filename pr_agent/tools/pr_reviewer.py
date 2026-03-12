@@ -143,7 +143,7 @@ class PRReviewer:
             "findings_metadata": self.findings_metadata,
             "small_file_context": self.small_file_context,
             "is_ai_metadata":  get_settings().get("config.enable_ai_metadata", False),
-            "related_tickets": get_settings().get('related_tickets', []),
+            "related_tickets": [],
             "ticket_compliance_note": "",
             'duplicate_prompt_examples': get_settings().config.get('duplicate_prompt_examples', False),
             "date": datetime.datetime.now().strftime('%Y-%m-%d'),
