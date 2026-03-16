@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 from github.Issue import Issue
 from github import AppAuthentication, Auth, Github, GithubException
+from requests.exceptions import RequestException
 from retry import retry
 from starlette_context import context
 
@@ -416,7 +417,14 @@ class GithubProvider(GitProvider):
             # publish all comments in a single message
             self.pr.create_review(commit=self.last_commit_id, comments=comments)
         except Exception as e:
-            get_logger().info(f"Initially failed to publish inline comments as committable")
+            get_logger().warning(
+                "Initially failed to publish inline comments as committable",
+                artifact={
+                    "error": str(e),
+                    "status": getattr(e, "status", None),
+                    "comments_count": len(comments),
+                },
+            )
 
             if (getattr(e, "status", None) == 422 and not disable_fallback):
                 pass  # continue to try _publish_inline_comments_fallback_with_verification
@@ -475,8 +483,15 @@ class GithubProvider(GitProvider):
         if verified_comments:
             try:
                 self.pr.create_review(commit=self.last_commit_id, comments=verified_comments)
-            except:
-                pass
+            except Exception as e:
+                get_logger().warning(
+                    "Failed to publish verified inline comments as a grouped review",
+                    artifact={
+                        "error": str(e),
+                        "status": getattr(e, "status", None),
+                        "comments_count": len(verified_comments),
+                    },
+                )
 
         # try to publish one by one the invalid comments as a one-line code comment
         if invalid_comments and get_settings().github.try_fix_invalid_inline_comments:
@@ -486,8 +501,15 @@ class GithubProvider(GitProvider):
                 try:
                     self.publish_inline_comments([comment], disable_fallback=True)
                     get_logger().info(f"Published invalid comment as a single line comment: {comment}")
-                except:
-                    get_logger().error(f"Failed to publish invalid comment as a single line comment: {comment}")
+                except Exception as e:
+                    get_logger().error(
+                        f"Failed to publish invalid comment as a single line comment: {comment}",
+                        artifact={
+                            "error": str(e),
+                            "status": getattr(e, "status", None),
+                            "comment": comment,
+                        },
+                    )
 
     def _verify_code_comment(self, comment: dict):
         is_verified = False
@@ -695,8 +717,23 @@ class GithubProvider(GitProvider):
         return self.pr.title
 
     def get_languages(self):
-        languages = self._get_repo().get_languages()
-        return languages
+        try:
+            languages = self._get_repo().get_languages()
+            return languages
+        except GithubException as e:
+            if getattr(e, "status", None) in {500, 502, 503, 504}:
+                get_logger().warning(
+                    "Failed to fetch repository languages from GitHub, using empty language map",
+                    artifact={"error": str(e), "status": e.status, "repo": self.repo},
+                )
+                return {}
+            raise
+        except RequestException as e:
+            get_logger().warning(
+                "Failed to fetch repository languages from GitHub, using empty language map",
+                artifact={"error": str(e), "repo": self.repo},
+            )
+            return {}
 
     def get_pr_branch(self):
         return self.pr.head.ref

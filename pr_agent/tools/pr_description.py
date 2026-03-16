@@ -225,7 +225,11 @@ class PRDescription:
                     self.prediction = await self.extend_uncovered_files(self.prediction)
             else:
                 get_logger().error(f"Error getting PR diff {self.pr_id}",
-                                   artifact={"traceback": traceback.format_exc()})
+                                   artifact={
+                                       "large_pr_handling": large_pr_handling,
+                                       "patches_diff_type": type(patches_diff).__name__,
+                                       "remaining_files": len(remaining_files_list),
+                                   })
                 self.prediction = None
         else:
             # get the diff in multiple patches, with the token handler only for the files prompt
