@@ -7,8 +7,8 @@ Keep this list minimal to ease upstream rebases.
 
 - Upstream repo: qodo-ai/pr-agent
 - Upstream tag: main
-- Upstream commit: 1b0609a013f53694c36d457149bde70abf50c048
-- Synced on: 2026-02-23
+- Upstream commit: 42d55d4182a4839820b11b6c4d06fce855970301
+- Synced on: 2026-03-23
 
 ## Local patches
 
