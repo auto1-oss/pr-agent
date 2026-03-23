@@ -27,6 +27,31 @@ def append_small_file_context_to_diff(
     return f"{diff_text}\n\nAdditional context for small touched files:\n======\n{context}\n======"
 
 
+def append_small_file_context_to_diffs(
+    diff_texts: list[str],
+    diff_files: list[FilePatchInfo],
+    token_handler,
+    *,
+    max_lines: int,
+    max_tokens: int,
+) -> list[str]:
+    if not diff_texts:
+        return diff_texts
+
+    return [
+        append_small_file_context_to_diff(
+            diff_text,
+            diff_files,
+            token_handler,
+            max_lines=max_lines,
+            max_tokens=max_tokens,
+        )
+        if diff_text
+        else diff_text
+        for diff_text in diff_texts
+    ]
+
+
 def build_small_file_context(
     diff_text: str,
     diff_files: list[FilePatchInfo],
