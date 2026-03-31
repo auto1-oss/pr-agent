@@ -5,10 +5,20 @@ import requests
 from litellm import acompletion
 from tenacity import retry, retry_if_exception_type, retry_if_not_exception_type, stop_after_attempt
 
-from pr_agent.algo import CLAUDE_EXTENDED_THINKING_MODELS, NO_SUPPORT_TEMPERATURE_MODELS, SUPPORT_REASONING_EFFORT_MODELS, USER_MESSAGE_ONLY_MODELS, STREAMING_REQUIRED_MODELS
+from pr_agent.algo import (
+    CLAUDE_EXTENDED_THINKING_MODELS,
+    NO_SUPPORT_TEMPERATURE_MODELS,
+    SUPPORT_REASONING_EFFORT_MODELS,
+    USER_MESSAGE_ONLY_MODELS,
+    STREAMING_REQUIRED_MODELS,
+)
 from pr_agent.algo.ai_handlers.base_ai_handler import BaseAiHandler
-from pr_agent.algo.ai_handlers.litellm_helpers import _handle_streaming_response, MockResponse, _get_azure_ad_token, \
-    _process_litellm_extra_body
+from pr_agent.algo.ai_handlers.litellm_helpers import (
+    _handle_streaming_response,
+    MockResponse,
+    _get_azure_ad_token,
+    _process_litellm_extra_body,
+)
 from pr_agent.algo.utils import ReasoningEffort, get_version
 from pr_agent.config_loader import get_settings
 from pr_agent.log import get_logger
@@ -31,6 +41,7 @@ class LiteLLMAIHandler(BaseAiHandler):
         """
         self.azure = False
         self.api_base = None
+        self.api_key = None
         self.repetition_penalty = None
 
         if get_settings().get("LITELLM.DISABLE_AIOHTTP", False):
@@ -38,10 +49,12 @@ class LiteLLMAIHandler(BaseAiHandler):
         if get_settings().get("OPENAI.KEY", None):
             openai.api_key = get_settings().openai.key
             litellm.openai_key = get_settings().openai.key
-        elif 'OPENAI_API_KEY' not in os.environ:
+        elif "OPENAI_API_KEY" not in os.environ:
             litellm.api_key = "dummy_key"
         if get_settings().get("aws.AWS_ACCESS_KEY_ID"):
-            assert get_settings().aws.AWS_SECRET_ACCESS_KEY and get_settings().aws.AWS_REGION_NAME, "AWS credentials are incomplete"
+            assert get_settings().aws.AWS_SECRET_ACCESS_KEY and get_settings().aws.AWS_REGION_NAME, (
+                "AWS credentials are incomplete"
+            )
             os.environ["AWS_ACCESS_KEY_ID"] = get_settings().aws.AWS_ACCESS_KEY_ID
             os.environ["AWS_SECRET_ACCESS_KEY"] = get_settings().aws.AWS_SECRET_ACCESS_KEY
             os.environ["AWS_REGION_NAME"] = get_settings().aws.AWS_REGION_NAME
@@ -76,36 +89,36 @@ class LiteLLMAIHandler(BaseAiHandler):
             litellm.api_key = get_settings().xai.key
         if get_settings().get("HUGGINGFACE.KEY", None):
             litellm.huggingface_key = get_settings().huggingface.key
-        if get_settings().get("HUGGINGFACE.API_BASE", None) and 'huggingface' in get_settings().config.model:
+        if get_settings().get("HUGGINGFACE.API_BASE", None) and "huggingface" in get_settings().config.model:
             litellm.api_base = get_settings().huggingface.api_base
             self.api_base = get_settings().huggingface.api_base
         if get_settings().get("OLLAMA.API_BASE", None):
             litellm.api_base = get_settings().ollama.api_base
             self.api_base = get_settings().ollama.api_base
+        if get_settings().get("OLLAMA.API_KEY", None):
+            self.api_key = get_settings().ollama.api_key
         if get_settings().get("HUGGINGFACE.REPETITION_PENALTY", None):
             self.repetition_penalty = float(get_settings().huggingface.repetition_penalty)
         if get_settings().get("VERTEXAI.VERTEX_PROJECT", None):
             litellm.vertex_project = get_settings().vertexai.vertex_project
-            litellm.vertex_location = get_settings().get(
-                "VERTEXAI.VERTEX_LOCATION", None
-            )
+            litellm.vertex_location = get_settings().get("VERTEXAI.VERTEX_LOCATION", None)
         # Google AI Studio
         # SEE https://docs.litellm.ai/docs/providers/gemini
         if get_settings().get("GOOGLE_AI_STUDIO.GEMINI_API_KEY", None):
-          os.environ["GEMINI_API_KEY"] = get_settings().google_ai_studio.gemini_api_key
+            os.environ["GEMINI_API_KEY"] = get_settings().google_ai_studio.gemini_api_key
 
         # Support deepseek models
         if get_settings().get("DEEPSEEK.KEY", None):
-            os.environ['DEEPSEEK_API_KEY'] = get_settings().get("DEEPSEEK.KEY")
+            os.environ["DEEPSEEK_API_KEY"] = get_settings().get("DEEPSEEK.KEY")
 
         # Support deepinfra models
         if get_settings().get("DEEPINFRA.KEY", None):
-            os.environ['DEEPINFRA_API_KEY'] = get_settings().get("DEEPINFRA.KEY")
+            os.environ["DEEPINFRA_API_KEY"] = get_settings().get("DEEPINFRA.KEY")
 
         # Support mistral models
         if get_settings().get("MISTRAL.KEY", None):
             os.environ["MISTRAL_API_KEY"] = get_settings().get("MISTRAL.KEY")
-        
+
         # Support codestral models
         if get_settings().get("CODESTRAL.KEY", None):
             os.environ["CODESTRAL_API_KEY"] = get_settings().get("CODESTRAL.KEY")
@@ -117,7 +130,7 @@ class LiteLLMAIHandler(BaseAiHandler):
             access_token = _get_azure_ad_token()
             litellm.api_key = access_token
             openai.api_key = access_token
-            
+
             # Set API base from settings
             self.api_base = get_settings().azure_ad.api_base
             litellm.api_base = self.api_base
@@ -152,14 +165,14 @@ class LiteLLMAIHandler(BaseAiHandler):
 
     def prepare_logs(self, response, system, user, resp, finish_reason):
         response_log = response.dict().copy()
-        response_log['system'] = system
-        response_log['user'] = user
-        response_log['output'] = resp
-        response_log['finish_reason'] = finish_reason
-        if hasattr(self, 'main_pr_language'):
-            response_log['main_pr_language'] = self.main_pr_language
+        response_log["system"] = system
+        response_log["user"] = user
+        response_log["output"] = resp
+        response_log["finish_reason"] = finish_reason
+        if hasattr(self, "main_pr_language"):
+            response_log["main_pr_language"] = self.main_pr_language
         else:
-            response_log['main_pr_language'] = 'unknown'
+            response_log["main_pr_language"] = "unknown"
         return response_log
 
     def _configure_claude_extended_thinking(self, model: str, kwargs: dict) -> dict:
@@ -178,18 +191,23 @@ class LiteLLMAIHandler(BaseAiHandler):
 
         # Validate extended thinking parameters
         if not isinstance(extended_thinking_budget_tokens, int) or extended_thinking_budget_tokens <= 0:
-            raise ValueError(f"extended_thinking_budget_tokens must be a positive integer, got {extended_thinking_budget_tokens}")
+            raise ValueError(
+                f"extended_thinking_budget_tokens must be a positive integer, got {extended_thinking_budget_tokens}"
+            )
         if not isinstance(extended_thinking_max_output_tokens, int) or extended_thinking_max_output_tokens <= 0:
-            raise ValueError(f"extended_thinking_max_output_tokens must be a positive integer, got {extended_thinking_max_output_tokens}")
+            raise ValueError(
+                f"extended_thinking_max_output_tokens must be a positive integer, got {extended_thinking_max_output_tokens}"
+            )
         if extended_thinking_max_output_tokens < extended_thinking_budget_tokens:
-            raise ValueError(f"extended_thinking_max_output_tokens ({extended_thinking_max_output_tokens}) must be greater than or equal to extended_thinking_budget_tokens ({extended_thinking_budget_tokens})")
+            raise ValueError(
+                f"extended_thinking_max_output_tokens ({extended_thinking_max_output_tokens}) must be greater than or equal to extended_thinking_budget_tokens ({extended_thinking_budget_tokens})"
+            )
 
-        kwargs["thinking"] = {
-            "type": "enabled",
-            "budget_tokens": extended_thinking_budget_tokens
-        }
+        kwargs["thinking"] = {"type": "enabled", "budget_tokens": extended_thinking_budget_tokens}
         if get_settings().config.verbosity_level >= 2:
-            get_logger().info(f"Adding max output tokens {extended_thinking_max_output_tokens} to model {model}, extended thinking budget tokens: {extended_thinking_budget_tokens}")
+            get_logger().info(
+                f"Adding max output tokens {extended_thinking_max_output_tokens} to model {model}, extended thinking budget tokens: {extended_thinking_budget_tokens}"
+            )
         kwargs["max_tokens"] = extended_thinking_max_output_tokens
 
         # temperature may only be set to 1 when thinking is enabled
@@ -206,10 +224,10 @@ class LiteLLMAIHandler(BaseAiHandler):
             # Parsing the log message and context
             record = message.record
             log_entry = {}
-            if record.get('extra', None).get('command', None) is not None:
-                log_entry.update({"command": record['extra']["command"]})
-            if record.get('extra', {}).get('pr_url', None) is not None:
-                log_entry.update({"pr_url": record['extra']["pr_url"]})
+            if record.get("extra", None).get("command", None) is not None:
+                log_entry.update({"command": record["extra"]["command"]})
+            if record.get("extra", {}).get("pr_url", None) is not None:
+                log_entry.update({"pr_url": record["extra"]["pr_url"]})
 
             # Append the log entry to the captured_logs list
             captured_extra.append(log_entry)
@@ -228,25 +246,29 @@ class LiteLLMAIHandler(BaseAiHandler):
         metadata = dict()
         callbacks = litellm.success_callback + litellm.failure_callback + litellm.service_callback
         if "langfuse" in callbacks:
-            metadata.update({
-                "trace_name": command,
-                "tags": [git_provider, command, f'version:{get_version()}'],
-                "trace_metadata": {
-                    "command": command,
-                    "pr_url": pr_url,
-                },
-            })
-        if "langsmith" in callbacks:
-            metadata.update({
-                "run_name": command,
-                "tags": [git_provider, command, f'version:{get_version()}'],
-                "extra": {
-                    "metadata": {
+            metadata.update(
+                {
+                    "trace_name": command,
+                    "tags": [git_provider, command, f"version:{get_version()}"],
+                    "trace_metadata": {
                         "command": command,
                         "pr_url": pr_url,
-                    }
-                },
-            })
+                    },
+                }
+            )
+        if "langsmith" in callbacks:
+            metadata.update(
+                {
+                    "run_name": command,
+                    "tags": [git_provider, command, f"version:{get_version()}"],
+                    "extra": {
+                        "metadata": {
+                            "command": command,
+                            "pr_url": pr_url,
+                        }
+                    },
+                }
+            )
 
         # Adding the captured logs to the kwargs
         kwargs["metadata"] = metadata
@@ -269,11 +291,12 @@ class LiteLLMAIHandler(BaseAiHandler):
             resp, finish_reason = None, None
             deployment_id = self.deployment_id
             if self.azure:
-                model = 'azure/' + model
-            if 'claude' in model and not system:
+                model = "azure/" + model
+            if "claude" in model and not system:
                 system = "No system prompt provided"
                 get_logger().warning(
-                    "Empty system prompt for claude model. Adding a newline character to prevent OpenAI API error.")
+                    "Empty system prompt for claude model. Adding a newline character to prevent OpenAI API error."
+                )
             messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
             if img_path:
@@ -287,11 +310,13 @@ class LiteLLMAIHandler(BaseAiHandler):
                 except Exception as e:
                     get_logger().error(f"Error fetching image: {img_path}", e)
                     return f"Error fetching image: {img_path}", "error"
-                messages[1]["content"] = [{"type": "text", "text": messages[1]["content"]},
-                                          {"type": "image_url", "image_url": {"url": img_path}}]
+                messages[1]["content"] = [
+                    {"type": "text", "text": messages[1]["content"]},
+                    {"type": "image_url", "image_url": {"url": img_path}},
+                ]
 
             thinking_kwargs_gpt5 = None
-            if model.startswith('gpt-5'):
+            if model.startswith("gpt-5"):
                 # Use configured reasoning_effort or default to MEDIUM
                 config_effort = get_settings().config.reasoning_effort
                 try:
@@ -310,8 +335,7 @@ class LiteLLMAIHandler(BaseAiHandler):
                     "allowed_openai_params": ["reasoning_effort"],
                 }
                 get_logger().info(f"Using reasoning_effort='{effort}' for GPT-5 model")
-                model = 'openai/'+model.replace('_thinking', '')  # remove _thinking suffix
-
+                model = "openai/" + model.replace("_thinking", "")  # remove _thinking suffix
 
             # Currently, some models do not support a separate system and user prompts
             if model in self.user_message_only_models or get_settings().config.custom_reasoning_model:
@@ -342,8 +366,8 @@ class LiteLLMAIHandler(BaseAiHandler):
 
             if thinking_kwargs_gpt5:
                 kwargs.update(thinking_kwargs_gpt5)
-                if 'temperature' in kwargs:
-                    del kwargs['temperature']
+                if "temperature" in kwargs:
+                    del kwargs["temperature"]
 
             # Add reasoning_effort if model supports it
             if model in self.support_reasoning_models:
@@ -363,7 +387,9 @@ class LiteLLMAIHandler(BaseAiHandler):
                 kwargs["reasoning_effort"] = reasoning_effort
 
             # https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking
-            if (model in self.claude_extended_thinking_models) and get_settings().config.get("enable_claude_extended_thinking", False):
+            if (model in self.claude_extended_thinking_models) and get_settings().config.get(
+                "enable_claude_extended_thinking", False
+            ):
                 kwargs = self._configure_claude_extended_thinking(model, kwargs)
 
             if get_settings().litellm.get("enable_callbacks", False):
@@ -379,7 +405,7 @@ class LiteLLMAIHandler(BaseAiHandler):
             if self.repetition_penalty:
                 kwargs["repetition_penalty"] = self.repetition_penalty
 
-            #Added support for extra_headers while using litellm to call underlying model, via a api management gateway, would allow for passing custom headers for security and authorization
+            # Added support for extra_headers while using litellm to call underlying model, via a api management gateway, would allow for passing custom headers for security and authorization
             if get_settings().get("LITELLM.EXTRA_HEADERS", None):
                 try:
                     litellm_extra_headers = json.loads(get_settings().litellm.extra_headers)
@@ -394,7 +420,7 @@ class LiteLLMAIHandler(BaseAiHandler):
 
             # Support for Bedrock custom inference profile via model_id
             model_id = get_settings().get("litellm.model_id")
-            if model_id and 'bedrock/' in model:
+            if model_id and "bedrock/" in model:
                 kwargs["model_id"] = model_id
                 get_logger().info(f"Using Bedrock custom inference profile: {model_id}")
 
@@ -403,6 +429,9 @@ class LiteLLMAIHandler(BaseAiHandler):
             if get_settings().config.verbosity_level >= 2:
                 get_logger().info(f"\nSystem prompt:\n{system}")
                 get_logger().info(f"\nUser prompt:\n{user}")
+
+            if self.api_key:
+                kwargs["api_key"] = self.api_key
 
             # Get completion with automatic streaming detection
             resp, finish_reason, response_obj = await self._get_completion(**kwargs)
@@ -446,6 +475,4 @@ class LiteLLMAIHandler(BaseAiHandler):
             response = await acompletion(**kwargs)
             if response is None or len(response["choices"]) == 0:
                 raise openai.APIError
-            return (response["choices"][0]['message']['content'],
-                    response["choices"][0]["finish_reason"],
-                    response)
+            return (response["choices"][0]["message"]["content"], response["choices"][0]["finish_reason"], response)
