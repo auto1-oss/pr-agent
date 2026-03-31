@@ -380,21 +380,43 @@ def format_review_issue_metadata(issue: dict, gfm_supported: bool, enable_badges
     return " ".join([f"`{label}`" for label in metadata_labels])
 
 
-def format_code_suggestion_metadata(label: str, score=None, enable_badges: bool | None = None) -> str:
+def format_code_suggestion_metadata(label: str, score=None, confidence: str | None = None,
+                                    evidence_type: str | None = None,
+                                    enable_badges: bool | None = None) -> str:
     if enable_badges is None:
-        enable_badges = get_settings().pr_reviewer.get("findings_metadata_badges", False)
+        enable_badges = get_settings().pr_code_suggestions.get(
+            "findings_metadata_badges",
+            get_settings().pr_reviewer.get("findings_metadata_badges", False),
+        )
     if not enable_badges:
         return ""
 
+    metadata_labels = []
     label = str(label).strip()
-    if not label:
-        return ""
+    if label:
+        metadata_labels.append(label)
 
     score_value = "" if score is None else str(score).strip()
     if score_value:
-        return f" [{label}, importance: {score_value}]"
+        metadata_labels.append(f"importance: {score_value}")
 
-    return f" [{label}]"
+    normalized_confidence = str(confidence or "").strip().lower()
+    if normalized_confidence in {"high", "medium", "low"}:
+        metadata_labels.append(f"{normalized_confidence.capitalize()} confidence")
+
+    normalized_evidence_type = str(evidence_type or "").strip().lower()
+    evidence_labels = {
+        "diff": "Diff evidence",
+        "ticket": "Ticket evidence",
+        "inferred": "Inferred evidence",
+    }
+    if normalized_evidence_type in evidence_labels:
+        metadata_labels.append(evidence_labels[normalized_evidence_type])
+
+    if not metadata_labels:
+        return ""
+
+    return f" [{', '.join(metadata_labels)}]"
 
 
 def extract_relevant_lines_str(end_line, files, relevant_file, start_line, dedent=False) -> str:

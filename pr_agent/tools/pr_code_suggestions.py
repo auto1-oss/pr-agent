@@ -13,10 +13,12 @@ from jinja2 import Environment, StrictUndefined
 from pr_agent.algo import MAX_TOKENS
 from pr_agent.algo.ai_handlers.base_ai_handler import BaseAiHandler
 from pr_agent.algo.ai_handlers.litellm_ai_handler import LiteLLMAIHandler
+from pr_agent.algo.context_enrichment import append_small_file_context_to_diffs
 from pr_agent.algo.git_patch_processing import decouple_and_convert_to_hunks_with_lines_numbers
 from pr_agent.algo.pr_processing import (add_ai_metadata_to_diff_files,
                                          get_pr_diff, get_pr_multi_diffs,
                                          retry_with_fallback_models)
+from pr_agent.algo.suggestion_output_filter import normalize_code_suggestions_output
 from pr_agent.algo.token_handler import TokenHandler
 from pr_agent.algo.utils import (ModelType, clip_tokens,
                                   format_code_suggestion_metadata, get_max_tokens,
@@ -60,6 +62,9 @@ class PRCodeSuggestions:
             get_settings().set("config.enable_ai_metadata", False)
             get_logger().debug(f"AI metadata is disabled for this command")
 
+        self.findings_metadata = get_settings().pr_code_suggestions.get("findings_metadata", False)
+        self.small_file_context = get_settings().pr_code_suggestions.get("small_file_context", False)
+
         self.vars = {
             "title": self.git_provider.pr.title,
             "branch": self.git_provider.get_pr_branch(),
@@ -73,6 +78,8 @@ class PRCodeSuggestions:
             "relevant_best_practices": "",
             "is_ai_metadata": get_settings().get("config.enable_ai_metadata", False),
             "focus_only_on_problems": get_settings().get("pr_code_suggestions.focus_only_on_problems", False),
+            "findings_metadata": self.findings_metadata,
+            "small_file_context": self.small_file_context,
             "date": datetime.now().strftime('%Y-%m-%d'),
             'duplicate_prompt_examples': get_settings().config.get('duplicate_prompt_examples', False),
         }
@@ -375,6 +382,10 @@ class PRCodeSuggestions:
                                         disable_extra_lines=False)
         self.patches_diff_list = [self.patches_diff]
         self.patches_diff_no_line_number = self.remove_line_numbers([self.patches_diff])[0]
+        self.patches_diff_list_no_line_numbers = [self.patches_diff_no_line_number]
+        self._append_small_file_context_to_diff_lists()
+        self.patches_diff = self.patches_diff_list[0]
+        self.patches_diff_no_line_number = self.patches_diff_list_no_line_numbers[0]
 
         if self.patches_diff:
             get_logger().debug(f"PR diff", artifact=self.patches_diff)
@@ -392,7 +403,7 @@ class PRCodeSuggestions:
         variables["diff_no_line_numbers"] = patches_diff_no_line_number  # update diff
         environment = Environment(undefined=StrictUndefined)
         system_prompt = environment.from_string(self.pr_code_suggestions_prompt_system).render(variables)
-        user_prompt = environment.from_string(get_settings().pr_code_suggestions_prompt.user).render(variables)
+        user_prompt = environment.from_string(self.pr_code_suggestions_prompt_user).render(variables)
         response, finish_reason = await self.ai_handler.chat_completion(
             model=model, temperature=get_settings().config.temperature, system=system_prompt, user=user_prompt)
         if not get_settings().config.publish_output:
@@ -420,6 +431,7 @@ class PRCodeSuggestions:
                 suggestion["score"] = 0
                 suggestion["score_why"] = ""
 
+        data = self._normalize_code_suggestions_output(data)
         return data
 
     async def analyze_self_reflection_response(self, data, response_reflect):
@@ -430,6 +442,10 @@ class PRCodeSuggestions:
                 try:
                     suggestion["score"] = code_suggestions_feedback[i]["suggestion_score"]
                     suggestion["score_why"] = code_suggestions_feedback[i]["why"]
+                    if 'confidence' in code_suggestions_feedback[i]:
+                        suggestion['confidence'] = code_suggestions_feedback[i]['confidence']
+                    if 'evidence_type' in code_suggestions_feedback[i]:
+                        suggestion['evidence_type'] = code_suggestions_feedback[i]['evidence_type']
 
                     if 'relevant_lines_start' not in suggestion:
                         relevant_lines_start = code_suggestions_feedback[i].get('relevant_lines_start', -1)
@@ -490,7 +506,8 @@ class PRCodeSuggestions:
 
     def _prepare_pr_code_suggestions(self, predictions: str) -> Dict:
         data = load_yaml(predictions.strip(),
-                         keys_fix_yaml=["relevant_file", "suggestion_content", "existing_code", "improved_code"],
+                         keys_fix_yaml=["relevant_file", "suggestion_content", "existing_code", "improved_code",
+                                        "confidence", "evidence_type"],
                          first_key="code_suggestions", last_key="label")
         if isinstance(data, list):
             data = {'code_suggestions': data}
@@ -550,7 +567,7 @@ class PRCodeSuggestions:
             else:
                 return self.git_provider.publish_comment('No suggestions found to improve this PR.')
 
-        findings_metadata_badges = get_settings().pr_reviewer.get("findings_metadata_badges", False)
+        findings_metadata_badges = get_settings().pr_code_suggestions.get("findings_metadata_badges", False)
 
         for d in data['code_suggestions']:
             try:
@@ -569,6 +586,8 @@ class PRCodeSuggestions:
                 suggestion_metadata = format_code_suggestion_metadata(
                     label,
                     d.get('score'),
+                    d.get('confidence'),
+                    d.get('evidence_type'),
                     enable_badges=findings_metadata_badges,
                 )
                 body = f"**Suggestion:** {content}{suggestion_metadata}\n```suggestion\n" + new_code_snippet + "\n```"
@@ -700,6 +719,9 @@ class PRCodeSuggestions:
                                                             model,
                                                             max_calls=get_settings().pr_code_suggestions.max_number_of_calls,
                                                             add_line_numbers=True)  # decouple hunk with line numbers
+                self.patches_diff_list_no_line_numbers = self.remove_line_numbers(self.patches_diff_list)
+
+        self._append_small_file_context_to_diff_lists()
 
         if self.patches_diff_list:
             get_logger().info(f"Number of PR chunk calls: {len(self.patches_diff_list)}")
@@ -739,6 +761,39 @@ class PRCodeSuggestions:
             get_logger().warning(f"Empty PR diff list")
             self.data = data = None
         return data
+
+    def _append_small_file_context_to_diff_lists(self):
+        patches_diff_list_no_line_numbers = getattr(self, "patches_diff_list_no_line_numbers", None)
+        if not self.small_file_context or not self.patches_diff_list or not patches_diff_list_no_line_numbers:
+            return
+
+        diff_files = self.git_provider.diff_files if self.git_provider.diff_files else self.git_provider.get_diff_files()
+        max_lines = get_settings().pr_code_suggestions.get("small_file_context_max_lines", 150)
+        max_tokens = get_settings().pr_code_suggestions.get("small_file_context_max_tokens", 3500)
+        self.patches_diff_list = append_small_file_context_to_diffs(
+            self.patches_diff_list,
+            diff_files,
+            self.token_handler,
+            max_lines=max_lines,
+            max_tokens=max_tokens,
+        )
+        self.patches_diff_list_no_line_numbers = append_small_file_context_to_diffs(
+            patches_diff_list_no_line_numbers,
+            diff_files,
+            self.token_handler,
+            max_lines=max_lines,
+            max_tokens=max_tokens,
+        )
+
+    def _normalize_code_suggestions_output(self, data: Dict) -> Dict:
+        if not data:
+            return data
+
+        return normalize_code_suggestions_output(
+            data,
+            findings_metadata=self.findings_metadata,
+            filter_mode=get_settings().pr_code_suggestions.get("findings_filter_mode", "off"),
+        )
 
     async def convert_to_decoupled_with_line_numbers(self, patches_diff_list_no_line_numbers, model) -> List[str]:
         with get_logger().contextualize(sub_feature='convert_to_decoupled_with_line_numbers'):
@@ -926,6 +981,8 @@ class PRCodeSuggestions:
                          'num_code_suggestions': len(suggestion_list),
                          'prev_suggestions_str': prev_suggestions_str,
                          "is_ai_metadata": get_settings().get("config.enable_ai_metadata", False),
+                         'findings_metadata': self.findings_metadata,
+                         'small_file_context': self.small_file_context,
                          'duplicate_prompt_examples': get_settings().config.get('duplicate_prompt_examples', False)}
             environment = Environment(undefined=StrictUndefined)
 

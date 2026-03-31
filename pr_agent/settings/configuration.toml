@@ -138,6 +138,12 @@ use_conversation_history=true
 commitable_code_suggestions = false
 dual_publishing_score_threshold=-1 # -1 to disable, [0-10] to set the threshold (>=) for publishing a code suggestion both in a table and as commitable
 focus_only_on_problems=true
+findings_metadata = false
+findings_metadata_badges = false
+findings_filter_mode = "off"
+small_file_context = false
+small_file_context_max_lines = 150
+small_file_context_max_tokens = 3500
 #
 extra_instructions = ""
 enable_help_text=false

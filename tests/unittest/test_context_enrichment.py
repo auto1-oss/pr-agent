@@ -1,4 +1,9 @@
-from pr_agent.algo.context_enrichment import append_small_file_context_to_diff, extract_files_in_diff, render_full_file_context
+from pr_agent.algo.context_enrichment import (
+    append_small_file_context_to_diff,
+    append_small_file_context_to_diffs,
+    extract_files_in_diff,
+    render_full_file_context,
+)
 from pr_agent.algo.types import EDIT_TYPE, FilePatchInfo
 
 
@@ -134,6 +139,41 @@ class TestContextEnrichment:
         assert "## Full file context: 'src/medium.py'" not in enriched_diff
         assert "## Full file context: 'src/small_a.py'" in enriched_diff
         assert "## Full file context: 'src/small_b.py'" in enriched_diff
+
+    def test_append_small_file_context_to_diffs_enriches_each_chunk_independently(self):
+        diff_texts = [
+            "## File: 'src/one.py'\n\n@@ ... @@\n__new hunk__\n1 +updated = True\n",
+            "## File: 'src/two.py'\n\n@@ ... @@\n__new hunk__\n1 +enabled = True\n",
+        ]
+        diff_files = [
+            FilePatchInfo(
+                base_file="updated = False\n",
+                head_file="updated = True\n",
+                patch="@@ -1 +1 @@\n-updated = False\n+updated = True\n",
+                filename="src/one.py",
+                edit_type=EDIT_TYPE.MODIFIED,
+            ),
+            FilePatchInfo(
+                base_file="enabled = False\n",
+                head_file="enabled = True\n",
+                patch="@@ -1 +1 @@\n-enabled = False\n+enabled = True\n",
+                filename="src/two.py",
+                edit_type=EDIT_TYPE.MODIFIED,
+            ),
+        ]
+
+        enriched_diffs = append_small_file_context_to_diffs(
+            diff_texts,
+            diff_files,
+            MockTokenHandler(),
+            max_lines=10,
+            max_tokens=500,
+        )
+
+        assert "## Full file context: 'src/one.py'" in enriched_diffs[0]
+        assert "## Full file context: 'src/two.py'" not in enriched_diffs[0]
+        assert "## Full file context: 'src/two.py'" in enriched_diffs[1]
+        assert "## Full file context: 'src/one.py'" not in enriched_diffs[1]
 
     def test_render_full_file_context_keeps_blank_line_numbers(self):
         file = FilePatchInfo(
