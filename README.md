@@ -14,8 +14,8 @@
 <br>
 The Original Open-Source PR Reviewer
 <br><br>
-<a href="https://github.com/Codium-ai/pr-agent/commits/main">
-<img alt="GitHub" src="https://img.shields.io/github/last-commit/Codium-ai/pr-agent/main?style=for-the-badge" height="20">
+<a href="https://github.com/the-pr-agent/pr-agent/commits/main">
+<img alt="GitHub" src="https://img.shields.io/github/last-commit/the-pr-agent/pr-agent/main?style=for-the-badge" height="20">
 </a>
 </div>
 
@@ -56,12 +56,12 @@ What else changed:
 
 ## Getting Started
 
+> [!NOTE]
+> **Docker Hub namespace migration.** Releases `0.34.2` and later are published under [`pragent/pr-agent`](https://hub.docker.com/r/pragent/pr-agent). Older releases (up to and including `v0.31`) remain available at the legacy [`codiumai/pr-agent`](https://hub.docker.com/r/codiumai/pr-agent) namespace as a frozen archive — no new images are pushed there. Update any pinned `image:` / `docker pull` / `uses: docker://` references when upgrading to `0.34.2+`.
+
 ### 🚀 Quick Start for PR-Agent
 
-#### 1. Try it Instantly (No Setup)
-Test PR-Agent on any public GitHub repository by commenting `@CodiumAI-Agent /improve`
-
-#### 2. GitHub Action (Recommended)
+#### 1. GitHub Action (Recommended)
 Add automated PR reviews to your repository with a simple workflow file:
 ```yaml
 # .github/workflows/pr-agent.yml
@@ -74,14 +74,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: PR Agent action step
-      uses: Codium-ai/pr-agent@main
+      uses: the-pr-agent/pr-agent@main
       env:
         OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 [Full GitHub Action setup guide](https://docs.pr-agent.ai/installation/github/#run-as-a-github-action)
 
-#### 3. CLI Usage (Local Development)
+#### 2. CLI Usage (Local Development)
 Run PR-Agent locally on your repository:
 ```bash
 pip install pr-agent
@@ -90,7 +90,7 @@ pr-agent --pr_url https://github.com/owner/repo/pull/123 review
 ```
 [Complete CLI setup guide](https://docs.pr-agent.ai/usage-guide/automations_and_usage/#local-repo-cli)
 
-#### 4. Other Platforms
+#### 3. Other Platforms
 - [GitLab webhook setup](https://docs.pr-agent.ai/installation/gitlab/)
 - [BitBucket app installation](https://docs.pr-agent.ai/installation/bitbucket/)
 - [Azure DevOps setup](https://docs.pr-agent.ai/installation/azure/)
@@ -169,7 +169,7 @@ PR-Agent offers comprehensive pull request functionalities integrated with vario
 |                                                         |                                                                                                                     |        |        |           |              |       |
 | [USAGE](https://docs.pr-agent.ai/usage-guide/)   | [CLI](https://docs.pr-agent.ai/usage-guide/automations_and_usage/#local-repo-cli)                            |   ✅   |   ✅   |    ✅     |      ✅      |  ✅   |
 |                                                         | [App / webhook](https://docs.pr-agent.ai/usage-guide/automations_and_usage/#github-app)                      |   ✅   |   ✅   |    ✅     |      ✅      |  ✅   |
-|                                                         | [Tagging bot](https://github.com/Codium-ai/pr-agent#try-it-now)                                                     |   ✅   |        |           |              |       |
+|                                                         | [Tagging bot](https://github.com/the-pr-agent/pr-agent#try-it-now)                                                     |   ✅   |        |           |              |       |
 |                                                         | [Actions](https://docs.pr-agent.ai/installation/github/#run-as-a-github-action)                              |   ✅   |   ✅   |    ✅     |      ✅      |       |
 |                                                         |                                                                                                                     |        |        |           |              |       |
 | [CORE](https://docs.pr-agent.ai/core-abilities/) | [Adaptive and token-aware file patch fitting](https://docs.pr-agent.ai/core-abilities/compression_strategy/) |   ✅   |   ✅   |    ✅     |      ✅      |       |
@@ -187,7 +187,7 @@ ___
 ## See It in Action
 
 </div>
-<h4><a href="https://github.com/Codium-ai/pr-agent/pull/530">/describe</a></h4>
+<h4><a href="https://github.com/the-pr-agent/pr-agent/pull/530">/describe</a></h4>
 <div align="center">
 <p float="center">
 <img src="https://www.codium.ai/images/pr_agent/describe_new_short_main.png" width="512">
@@ -195,7 +195,7 @@ ___
 </div>
 <hr>
 
-<h4><a href="https://github.com/Codium-ai/pr-agent/pull/732#issuecomment-1975099151">/review</a></h4>
+<h4><a href="https://github.com/the-pr-agent/pr-agent/pull/732#issuecomment-1975099151">/review</a></h4>
 <div align="center">
 <p float="center">
 <kbd>
@@ -205,7 +205,7 @@ ___
 </div>
 <hr>
 
-<h4><a href="https://github.com/Codium-ai/pr-agent/pull/732#issuecomment-1975099159">/improve</a></h4>
+<h4><a href="https://github.com/the-pr-agent/pr-agent/pull/732#issuecomment-1975099159">/improve</a></h4>
 <div align="center">
 <p float="center">
 <kbd>
