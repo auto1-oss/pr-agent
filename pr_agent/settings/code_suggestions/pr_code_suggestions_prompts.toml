@@ -72,10 +72,10 @@ Specific guidelines for generating code suggestions:
 {%- endif %}
 - Be aware that your input consists only of partial code segments (PR diff code), not the complete codebase. Therefore, avoid making suggestions that might duplicate existing functionality, and refrain from questioning code elements (such as variable declarations or import statements) that may be defined elsewhere in the codebase.
 - When mentioning code elements (variables, names, or files) in your response, surround them with backticks (`). For example: "verify that `user_id` is..."
-{%- if small_file_context %}
+{%- if small_file_context | default(false) %}
 - Some files may include a `## Full file context:` section with the complete post-change contents of a small touched file. Use this only to validate suggestions related to the changed file, and do not report issues from untouched regions unless they are necessary to explain a defect introduced by the PR.
 {%- endif %}
-{%- if findings_metadata %}
+{%- if findings_metadata | default(false) %}
 - For each suggestion, set `confidence` from `high`, `medium`, or `low` based only on the visible evidence.
 - Set `evidence_type` to `diff` when changed lines directly support the suggestion, `ticket` for a clear ticket mismatch, or `inferred` when the suggestion depends on indirect clues.
 {%- endif %}
@@ -83,12 +83,30 @@ Specific guidelines for generating code suggestions:
 - Do not speculate that a change might break other code unless you can identify the specific affected code path from the visible diff context.
 - When confidence is limited but the potential impact is high, make the uncertainty explicit. Otherwise, prefer returning fewer suggestions over guessing.
 
+{%- if skills_context %}
+
+
+Organizational standards and review skills (apply the ones relevant to this PR):
+======
+{{ skills_context }}
+======
+{%- endif %}
+
 {%- if extra_instructions %}
 
 
 Extra user-provided instructions (should be addressed with high priority):
 ======
 {{ extra_instructions }}
+======
+{%- endif %}
+
+{%- if repo_context %}
+
+
+Repository context:
+======
+{{ repo_context }}
 ======
 {%- endif %}
 
@@ -102,7 +120,7 @@ class CodeSuggestion(BaseModel):
     suggestion_content: str = Field(description="An actionable suggestion to enhance, improve or fix the new code introduced in the PR. Don't present here actual code snippets, just the suggestion. Be short and concise")
     improved_code: str = Field(description="A refined code snippet that replaces the 'existing_code' snippet after implementing the suggestion.")
     one_sentence_summary: str = Field(description="A concise, single-sentence overview (up to 6 words) of the suggested improvement. Focus on the 'what'. Be general, and avoid method or variable names.")
-{%- if findings_metadata %}
+{%- if findings_metadata | default(false) %}
     confidence: str = Field(description="Your confidence in this suggestion based only on the visible evidence. Allowed values: high, medium, low")
     evidence_type: str = Field(description="What directly supports this suggestion. Allowed values: diff, ticket, inferred")
 {%- endif %}
@@ -133,7 +151,7 @@ code_suggestions:
     ...
   one_sentence_summary: |
     ...
-{%- if findings_metadata %}
+{%- if findings_metadata | default(false) %}
   confidence: |
     high
   evidence_type: |
@@ -178,7 +196,7 @@ code_suggestions:
     ...
   one_sentence_summary: |
     ...
-{%- if findings_metadata %}
+{%- if findings_metadata | default(false) %}
   confidence: |
     high
   evidence_type: |

@@ -8,6 +8,7 @@ from pr_agent.algo.git_patch_processing import extract_hunk_headers
 from pr_agent.algo.types import FilePatchInfo
 from pr_agent.git_providers.github_provider import GithubProvider
 from pr_agent.tools.pr_reviewer import PRReviewer
+from tests.unittest._settings_helpers import restore_settings, snapshot_settings
 
 
 def test_extract_hunk_headers_defaults_missing_sizes_to_one():
@@ -133,7 +134,7 @@ def test_pr_reviewer_initial_vars_ignore_cached_related_tickets(monkeypatch):
     import pr_agent.tools.pr_reviewer as pr_reviewer_module
 
     settings = get_settings()
-    previous_related_tickets = settings.get("related_tickets", [])
+    settings_snapshot = snapshot_settings(["related_tickets"])
 
     monkeypatch.setattr(pr_reviewer_module, "get_git_provider_with_context", lambda _pr_url: FakeGitProvider())
     monkeypatch.setattr(pr_reviewer_module, "get_main_pr_language", lambda _languages, _files: "python")
@@ -147,4 +148,4 @@ def test_pr_reviewer_initial_vars_ignore_cached_related_tickets(monkeypatch):
         assert reviewer.vars["related_tickets"] == []
         assert captured_vars["related_tickets"] == []
     finally:
-        settings.set("related_tickets", previous_related_tickets)
+        restore_settings(settings_snapshot)
