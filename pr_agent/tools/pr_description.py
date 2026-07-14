@@ -16,6 +16,8 @@ from pr_agent.algo.pr_processing import (
     get_pr_diff_multiple_patchs,
     retry_with_fallback_models,
 )
+from pr_agent.algo.skills_loader import get_skills_context
+from pr_agent.algo.repo_context import build_repo_context
 from pr_agent.algo.token_handler import TokenHandler
 from pr_agent.algo.utils import (
     ModelType,
@@ -72,6 +74,8 @@ class PRDescription:
             "language": self.main_pr_language,
             "diff": "",  # empty diff for initial calculation
             "extra_instructions": get_settings().pr_description.extra_instructions,
+            "skills_context": get_skills_context(),
+            "repo_context": build_repo_context(self.git_provider),
             "commit_messages_str": self.git_provider.get_commit_messages(),
             "enable_custom_labels": get_settings().config.enable_custom_labels,
             "custom_labels_class": "",  # will be filled if necessary in 'set_custom_labels' function
@@ -203,7 +207,10 @@ class PRDescription:
                     else:
                         self.git_provider.publish_comment(full_markdown_description)
                 else:
-                    self.git_provider.publish_description(pr_title.strip(), pr_body)
+                    # Pass None when the title is not AI-generated so the provider
+                    # leaves it untouched, avoiding reverting a manual edit (#2474).
+                    title_to_publish = pr_title.strip() if get_settings().pr_description.generate_ai_title else None
+                    self.git_provider.publish_description(title_to_publish, pr_body)
 
                     # publish final update message
                     if get_settings().pr_description.final_update_message and not get_settings().config.get(
@@ -236,7 +243,7 @@ class PRDescription:
             return None
 
         large_pr_handling = (
-            get_settings().pr_description.enable_large_pr_handling
+            get_settings().pr_description.get("enable_large_pr_handling", True)
             and "pr_description_only_files_prompts" in get_settings()
         )
         output = get_pr_diff(
@@ -291,7 +298,7 @@ class PRDescription:
             ) = get_pr_diff_multiple_patchs(self.git_provider, token_handler_only_files_prompt, model)
 
             # get the files prediction for each patch
-            if not get_settings().pr_description.async_ai_calls:
+            if not get_settings().pr_description.get("async_ai_calls", True):
                 results = []
                 for i, patches in enumerate(patches_compressed_list):  # sync calls
                     patches_diff = "\n".join(patches)

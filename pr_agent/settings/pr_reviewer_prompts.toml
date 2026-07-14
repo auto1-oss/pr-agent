@@ -45,10 +45,10 @@ __new hunk__
 - When quoting variables, names or file paths from the code, use backticks (`) instead of single quote (').
 - Note that you only see changed code segments (diff hunks in a PR), not the entire codebase. Avoid suggestions that might duplicate existing functionality or questioning code elements (like variables declarations or import statements) that may be defined elsewhere in the codebase.
 - Also note that if the code ends at an opening brace or statement that begins a new scope (like 'if', 'for', 'try'), don't treat it as incomplete. Instead, acknowledge the visible scope boundary and analyze only the code shown.
-{%- if small_file_context %}
+{%- if small_file_context | default(false) %}
 - Some files may include a `## Full file context:` section with the complete post-change contents of a small touched file. Use this only to validate issues related to the changed file, and do not report issues from untouched regions unless they are necessary to explain a defect introduced by the PR.
 {%- endif %}
-{%- if findings_metadata %}
+{%- if findings_metadata | default(false) %}
 - For each issue, set `confidence` from `high`, `medium`, or `low` based only on the visible evidence.
 - Set `evidence_type` to `diff` when changed lines directly support the issue, `ticket` for a clear ticket mismatch, or `inferred` when the issue depends on indirect clues.
 {%- endif %}
@@ -67,12 +67,30 @@ Constructing comments:
 - Keep each issue description concise. Write so the reader grasps the point immediately without close reading.
 - Use a matter-of-fact, helpful tone. Avoid accusatory language, excessive praise, or filler phrases like 'Great job', 'Thanks for'.
 
+{%- if skills_context %}
+
+
+Organizational standards and review skills (apply the ones relevant to this PR):
+======
+{{ skills_context }}
+======
+{%- endif %}
+
 {%- if extra_instructions %}
 
 
 Extra instructions from the user:
 ======
 {{ extra_instructions }}
+======
+{% endif %}
+
+{%- if repo_context %}
+
+
+Repository context:
+======
+{{ repo_context }}
 ======
 {% endif %}
 
@@ -89,7 +107,7 @@ class KeyIssuesComponentLink(BaseModel):
     relevant_file: str = Field(description="The full file path of the relevant file")
     issue_header: str = Field(description="One or two word title for the issue. For example: 'Possible Bug', etc.")
     issue_content: str = Field(description="A short and concise description of the issue, why it matters, and the specific scenario or input that triggers it. Do not mention line numbers in this field.")
-{%- if findings_metadata %}
+{%- if findings_metadata | default(false) %}
     confidence: str = Field(description="Your confidence in this issue based only on the visible evidence. Allowed values: high, medium, low")
     evidence_type: str = Field(description="What directly supports this issue. Allowed values: diff, ticket, inferred")
 {%- endif %}
@@ -188,7 +206,7 @@ review:
         Possible Bug
       issue_content: |
         ...
-{%- if findings_metadata %}
+{%- if findings_metadata | default(false) %}
       confidence: |
         high
       evidence_type: |
@@ -234,7 +252,7 @@ Ticket URL: '{{ ticket.ticket_url }}'
 
 Ticket Title: '{{ ticket.title }}'
 
-{%- if ticket.labels %}
+{%- if ticket.labels is defined and ticket.labels %}
 
 Ticket Labels: {{ ticket.labels }}
 
@@ -332,7 +350,7 @@ review:
         ...
       issue_content: |
         ...
-{%- if findings_metadata %}
+{%- if findings_metadata | default(false) %}
       confidence: |
         high
       evidence_type: |
