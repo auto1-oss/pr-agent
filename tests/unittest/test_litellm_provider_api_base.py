@@ -4,7 +4,6 @@ import litellm
 import pytest
 
 import pr_agent.algo.ai_handlers.litellm_ai_handler as litellm_handler
-from pr_agent.algo.ai_handlers.litellm_ai_handler import LiteLLMAIHandler
 
 
 def _make_settings():
@@ -63,7 +62,7 @@ async def test_provider_specific_api_bases(monkeypatch):
         new_callable=AsyncMock,
     ) as mock_completion:
         mock_completion.return_value = _mock_response()
-        handler = LiteLLMAIHandler()
+        handler = litellm_handler.LiteLLMAIHandler()
 
         await handler.chat_completion(
             model="anthropic/claude-sonnet-5",
