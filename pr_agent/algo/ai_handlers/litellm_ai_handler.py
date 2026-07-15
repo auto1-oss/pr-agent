@@ -41,6 +41,7 @@ class LiteLLMAIHandler(BaseAiHandler):
         """
         self.azure = False
         self.api_base = None
+        self.anthropic_api_base = None
         self.repetition_penalty = None
         self._aws_imds_mode = False
         self._aws_static_creds = None
@@ -152,6 +153,8 @@ class LiteLLMAIHandler(BaseAiHandler):
             self.api_base = get_settings().openai.api_base
         if get_settings().get("ANTHROPIC.KEY", None):
             litellm.anthropic_key = get_settings().anthropic.key
+        if get_settings().get("ANTHROPIC.API_BASE", None):
+            self.anthropic_api_base = get_settings().anthropic.api_base
         if get_settings().get("COHERE.KEY", None):
             litellm.cohere_key = get_settings().cohere.key
         if get_settings().get("GROQ.KEY", None):
@@ -516,10 +519,14 @@ class LiteLLMAIHandler(BaseAiHandler):
                     messages = [{"role": "user", "content": user}]
 
                 # Build request kwargs after normalizing messages for the target model.
-                # Databricks selects its endpoint via the DATABRICKS_API_BASE env var; don't let an
-                # api_base configured by another provider (OpenRouter/Ollama/Azure AD/OpenAI) during
-                # __init__ override it in multi-provider configs. None lets LiteLLM read the env var.
-                api_base = os.environ.get("DATABRICKS_API_BASE") if is_databricks else self.api_base
+                # Provider-specific endpoints must not be overridden by an API base configured for
+                # another provider in the same process.
+                if is_databricks:
+                    api_base = os.environ.get("DATABRICKS_API_BASE")
+                elif user_model.startswith("anthropic/") and self.anthropic_api_base:
+                    api_base = self.anthropic_api_base
+                else:
+                    api_base = self.api_base
                 kwargs = {
                         "model": model,
                         "deployment_id": deployment_id,
