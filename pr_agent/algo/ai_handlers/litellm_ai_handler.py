@@ -505,6 +505,7 @@ class LiteLLMAIHandler(BaseAiHandler):
                     else:
                         provider_prefix = 'openai/'
                     model = provider_prefix + model_base.replace('_thinking', '')  # remove _thinking suffix
+                    get_logger().info(f"Using GPT-5 model '{model}'")
 
 
                 # Currently, some models do not support a separate system and user prompts
