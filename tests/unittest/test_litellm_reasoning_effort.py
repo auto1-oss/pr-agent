@@ -469,6 +469,7 @@ class TestLiteLLMReasoningEffort:
 
             # Verify log
             mock_logger.info.assert_any_call("Using reasoning_effort='low' for GPT-5 model")
+            mock_logger.info.assert_any_call("Using GPT-5 model 'openai/gpt-5-2025-08-07'")
 
     @pytest.mark.asyncio
     async def test_gpt5_info_logging_default_value(self, monkeypatch, mock_logger):
