@@ -158,6 +158,34 @@ async def test_push_inline_hides_label_when_badges_are_disabled():
 
 
 @pytest.mark.asyncio
+async def test_push_inline_uses_diff_block_when_apply_suggestion_is_disabled():
+    git_provider = MagicMock()
+    git_provider.diff_files = [
+        FilePatchInfo(
+            base_file="",
+            head_file="def f():\n    return old()\n",
+            patch="",
+            filename="app.py",
+        )
+    ]
+    git_provider.publish_code_suggestions.return_value = True
+    tool = _make_tool(git_provider)
+    settings = get_settings()
+    snapshot = snapshot_settings(["pr_code_suggestions.enable_apply_suggestion"])
+    settings.set("pr_code_suggestions.enable_apply_suggestion", False)
+    try:
+        await tool.push_inline_code_suggestions({"code_suggestions": [_suggestion()]})
+
+        body = git_provider.publish_code_suggestions.call_args.args[0][0]["body"]
+        assert "```diff\n" in body
+        assert "-    return old()" in body
+        assert "+    return new()" in body
+        assert "```suggestion" not in body
+    finally:
+        restore_settings(snapshot)
+
+
+@pytest.mark.asyncio
 async def test_push_inline_publishes_no_suggestions_comment_when_empty():
     git_provider = MagicMock()
     tool = _make_tool(git_provider)
