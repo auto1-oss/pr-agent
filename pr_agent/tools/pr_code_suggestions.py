@@ -584,6 +584,7 @@ class PRCodeSuggestions:
                 relevant_lines_start = int(d['relevant_lines_start'])  # absolute position
                 relevant_lines_end = int(d['relevant_lines_end'])
                 content = d['suggestion_content'].rstrip()
+                existing_code_snippet = d['existing_code'].rstrip()
                 new_code_snippet = d['improved_code'].rstrip()
                 label = d['label'].strip()
 
@@ -597,7 +598,20 @@ class PRCodeSuggestions:
                     d.get('evidence_type'),
                     enable_badges=findings_metadata_badges,
                 )
-                body = f"**Suggestion:** {content}{suggestion_metadata}\n```suggestion\n" + new_code_snippet + "\n```"
+                if get_settings().pr_code_suggestions.get("enable_apply_suggestion", True):
+                    code_block = "```suggestion\n" + new_code_snippet + "\n```"
+                else:
+                    existing_code_snippet = self.dedent_code(
+                        relevant_file, relevant_lines_start, existing_code_snippet
+                    )
+                    diff = difflib.unified_diff(
+                        existing_code_snippet.splitlines(),
+                        new_code_snippet.splitlines(),
+                        lineterm="",
+                    )
+                    diff_lines = list(diff)[2:]
+                    code_block = "```diff\n" + "\n".join(diff_lines) + "\n```"
+                body = f"**Suggestion:** {content}{suggestion_metadata}\n{code_block}"
                 code_suggestions.append({'body': body, 'relevant_file': relevant_file,
                                          'relevant_lines_start': relevant_lines_start,
                                          'relevant_lines_end': relevant_lines_end,

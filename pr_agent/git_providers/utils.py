@@ -345,6 +345,19 @@ def _apply_repo_settings_file(repo_settings_file):
     # internal filesystem path into the PR configuration-error comment.
     validate_file_security(parsed_toml, ".pr_agent.toml")
 
+    configured_allowed_keys = get_settings().get("CONFIG.REPO_SETTINGS_ALLOWED_KEYS", None)
+    if configured_allowed_keys is not None:
+        if isinstance(configured_allowed_keys, (list, tuple, set)):
+            configured_allowed_keys = frozenset(
+                key.strip().lower() for key in configured_allowed_keys
+                if isinstance(key, str) and key.strip()
+            )
+        else:
+            get_logger().warning(
+                "CONFIG.REPO_SETTINGS_ALLOWED_KEYS must be a list; rejecting all repo settings"
+            )
+            configured_allowed_keys = frozenset()
+
     # Apply the already-parsed data directly instead of re-reading the file through Dynaconf, which
     # would parse the same TOML a second time. Section names are matched case-insensitively (Dynaconf
     # stores them upper-cased); list/dict values replace rather than merge, matching the loader.
@@ -352,6 +365,21 @@ def _apply_repo_settings_file(repo_settings_file):
         if not isinstance(contents, dict) or not contents:
             get_logger().debug(f"Skipping non-table or empty section: {section}")
             continue
+        if configured_allowed_keys is not None:
+            rejected = [
+                key for key in contents
+                if f"{section}.{key}".lower() not in configured_allowed_keys
+            ]
+            if rejected:
+                get_logger().warning(
+                    f"Ignoring non-allowlisted key(s) {rejected} in section [{section}] from repo settings"
+                )
+            contents = {
+                key: value for key, value in contents.items()
+                if f"{section}.{key}".lower() in configured_allowed_keys
+            }
+            if not contents:
+                continue
         allowed_keys = _REPO_OVERRIDABLE_KEYS_BY_HOST_SECTION.get(section.lower())
         if allowed_keys is not None:
             rejected = [k for k in contents if k.lower() not in allowed_keys]

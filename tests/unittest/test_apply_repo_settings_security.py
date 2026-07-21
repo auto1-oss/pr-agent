@@ -54,7 +54,7 @@ class FakeGitProvider:
         self.comments.append(body)
 
 
-SNAPSHOT_SECTIONS = ("CONFIG", "PR_REVIEWER", "CUSTOM_SECTION_FOR_TEST")
+SNAPSHOT_SECTIONS = ("CONFIG", "PR_REVIEWER", "PR_CODE_SUGGESTIONS", "CUSTOM_SECTION_FOR_TEST")
 
 
 def _snapshot_settings_sections(settings):
@@ -157,6 +157,33 @@ def test_valid_repo_settings_merge_overrides_key_and_preserves_siblings(monkeypa
     assert pr_reviewer.get("num_max_findings") == 11
     # Unrelated sibling key in the same section must be preserved by the merge logic.
     assert pr_reviewer.get("require_tests_review") == sibling_before
+
+
+def test_configured_allowlist_rejects_all_other_repo_settings(monkeypatch, settings_snapshot):
+    provider = FakeGitProvider(repo_settings_bytes=b"""
+[config]
+model = "expensive-model"
+[pr_code_suggestions]
+enable_apply_suggestion = false
+extra_instructions = "untrusted instructions"
+""")
+    captured = _install_provider(monkeypatch, provider)
+
+    settings = get_settings()
+    settings.set("config.use_repo_settings_file", True)
+    settings.set(
+        "config.repo_settings_allowed_keys",
+        ["pr_code_suggestions.enable_apply_suggestion"],
+    )
+    model_before = _section(settings, "config").get("model")
+    instructions_before = _section(settings, "pr_code_suggestions").get("extra_instructions")
+
+    apply_repo_settings("https://example.com/owner/repo/pull/1")
+
+    assert captured["errors"] is None
+    assert _section(settings, "pr_code_suggestions").get("enable_apply_suggestion") is False
+    assert _section(settings, "pr_code_suggestions").get("extra_instructions") == instructions_before
+    assert _section(settings, "config").get("model") == model_before
 
 
 def test_invalid_toml_does_not_pollute_settings(monkeypatch, settings_snapshot):
