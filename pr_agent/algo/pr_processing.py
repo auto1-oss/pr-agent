@@ -35,6 +35,34 @@ def cap_and_log_extra_lines(value, direction) -> int:
     return value
 
 
+def record_starved_diff(token_handler: TokenHandler, model: str, skipped_files: list,
+                        diff_and_prompt_tokens: int = 0) -> None:
+    """Record that pruning left the caller with no diff at all, and say so in the log.
+
+    The tools read `token_handler.starved_diff` to report the outcome on the pull request. Before
+    this existed, /review published nothing and /improve published "No code suggestions found",
+    both of which read as a clean review of code that never reached the model; ten wkda/admin pull
+    requests merged that way (OPS-25871). Logged at error, not warning, because the run produced
+    no review: the remedy is a repository setting somebody has to change.
+
+    This is a report, not a remedy. The token limit is unchanged and the run still ends empty.
+    """
+    prompt_tokens = getattr(token_handler, "prompt_tokens", 0)
+    max_tokens = get_max_tokens(model)
+    token_handler.starved_diff = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "prompt_tokens": prompt_tokens,
+        "diff_and_prompt_tokens": diff_and_prompt_tokens,
+        "skipped_files": list(skipped_files),
+    }
+    get_logger().error(
+        f"Diff pruned to nothing: the prompt needs {prompt_tokens} of {max_tokens} tokens, so none "
+        f"of the {len(skipped_files)} changed files could be included",
+        artifact=token_handler.starved_diff,
+    )
+
+
 def get_pr_diff(git_provider: GitProvider, token_handler: TokenHandler,
                 model: str,
                 add_line_numbers_to_hunks: bool = False,
@@ -89,6 +117,12 @@ def get_pr_diff(git_provider: GitProvider, token_handler: TokenHandler,
     patches_compressed = patches_compressed_list[0]
     total_tokens_new = total_tokens_list[0]
     files_in_patch = files_in_patches_list[0]
+
+    # Pruning kept NO file at all. The prompt overhead -- system, user, repo context, ticket -- has
+    # filled the model budget on its own, so the tool is about to run on an empty diff and return
+    # nothing.
+    if not files_in_patch and file_dict:
+        record_starved_diff(token_handler, model, sorted(file_dict.keys()), total_tokens)
 
     # Insert additional information about added, modified, and deleted files if there is enough space
     max_tokens = get_max_tokens(model) - OUTPUT_BUFFER_TOKENS_HARD_THRESHOLD
@@ -496,6 +530,14 @@ def get_pr_multi_diffs(git_provider: GitProvider,
     if patches:
         final_diff = "\n".join(patches)
         final_diff_list.append(final_diff.strip())
+
+    # Same starvation as in get_pr_diff(): every candidate file was skipped or clipped away, so the
+    # caller is about to run on nothing. This path is the one /improve takes in extended mode, and
+    # its "No code suggestions found for the PR" message is a verdict on code it never saw.
+    if not final_diff_list:
+        candidate_files = sorted(f.filename.strip() for f in sorted_files if f.patch)
+        if candidate_files:
+            record_starved_diff(token_handler, model, candidate_files)
 
     return final_diff_list
 

@@ -63,6 +63,50 @@ class PRReviewHeader(str, Enum):
     INCREMENTAL = "## Incremental PR Reviewer Guide"
 
 
+STARVED_DIFF_HEADER = "## PR-Agent could not read this diff"
+
+# A GitHub issue comment is capped at 65536 characters, and this list is one line per changed
+# file, so a large pull request would push the body past the cap and lose the whole comment --
+# the failure this notice exists to make visible. The count in the sentence above the list stays
+# exact either way, so truncating costs the reader nothing they need in order to act.
+STARVED_DIFF_MAX_LISTED_FILES = 50
+
+
+def starved_diff_comment(report: dict, tool: str) -> str:
+    """Build the pull-request comment for a diff that pruning emptied.
+
+    The point of this comment is that NOTHING was reviewed. Say that first and say it plainly: the
+    silent version of this outcome was indistinguishable from a clean review, and a reader who
+    takes "no findings" for "no problems" merges unreviewed code. Name the numbers, because the
+    remedy is a number the repository owner controls -- the size of `repo_context_files`.
+    """
+    max_tokens = report.get("max_tokens") or 0
+    prompt_tokens = report.get("prompt_tokens") or 0
+    skipped = report.get("skipped_files") or []
+    listed = skipped[:STARVED_DIFF_MAX_LISTED_FILES]
+    # A path may legitimately contain a backtick, which would end the inline code span and let the
+    # rest of the name render as markup. Neutralise it rather than trusting the filename.
+    safe_names = [str(name).replace("`", "'") for name in listed]
+    file_list = "\n".join("- `{}`".format(name) for name in safe_names)
+    if len(skipped) > len(listed):
+        file_list += f"\n- ...and {len(skipped) - len(listed)} more"
+    overhead = f"{prompt_tokens} of {max_tokens}" if max_tokens else str(prompt_tokens)
+    share = f" ({prompt_tokens * 100 // max_tokens} %)" if max_tokens else ""
+
+    return (
+        f"{STARVED_DIFF_HEADER}\n\n"
+        f"**`{tool}` produced no output, and it did not review any code.** This is not a clean "
+        f"result. The prompt for this repository needs {overhead} available tokens{share} before "
+        f"any of the diff is added, so all "
+        f"{len(skipped)} changed file(s) were dropped and the model saw an empty diff:\n\n"
+        f"{file_list}\n\n"
+        f"**What to do:** shrink `config.repo_context_files` in this repository's `.pr_agent.toml`, "
+        f"on the default branch — the bot reads that setting from the default branch, so a change "
+        f"on this branch will not take effect here. Until the context fits, `/review` and "
+        f"`/improve` cannot see this pull request, however small the diff is.\n"
+    )
+
+
 class ReasoningEffort(str, Enum):
     XHIGH = "xhigh"
     HIGH = "high"

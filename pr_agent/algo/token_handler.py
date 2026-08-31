@@ -67,7 +67,12 @@ class TokenHandler:
         - user: The user string.
         """
         self.encoder = TokenEncoder.get_token_encoder()
-        
+
+        # Set by get_pr_diff() when pruning removed EVERY changed file, i.e. the prompt overhead
+        # alone filled the model budget and the tool received no diff at all. The tools read it to
+        # say so on the pull request; None means it did not happen. See OPS-25871.
+        self.starved_diff = None
+
         if pr is not None:
             self.prompt_tokens = self._get_system_user_tokens(pr, self.encoder, vars, system, user)
 
