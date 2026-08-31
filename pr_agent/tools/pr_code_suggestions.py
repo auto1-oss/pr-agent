@@ -26,7 +26,8 @@ from pr_agent.algo.utils import (ModelType, clip_tokens,
                                   format_code_suggestion_metadata, get_max_tokens,
                                   get_model, load_yaml,
                                   replace_code_tags,
-                                  show_relevant_configurations)
+                                  show_relevant_configurations,
+                                  starved_diff_comment)
 from pr_agent.config_loader import get_settings
 from pr_agent.git_providers import (AzureDevopsProvider, GithubProvider,
                                     GitLabProvider, get_git_provider,
@@ -224,7 +225,15 @@ class PRCodeSuggestions:
         return pr_body
 
     async def publish_no_suggestions(self):
-        pr_body = "## PR Code Suggestions ✨\n\nNo code suggestions found for the PR."
+        # "No code suggestions found" is a verdict on the code. It must not be published when the
+        # tool never saw the code: pruning can empty the diff outright, and then this message reads
+        # as a clean bill of health for a pull request nothing looked at. Say what happened instead.
+        # See OPS-25871.
+        starved = getattr(self.token_handler, "starved_diff", None)
+        if starved:
+            pr_body = starved_diff_comment(starved, "/improve")
+        else:
+            pr_body = "## PR Code Suggestions ✨\n\nNo code suggestions found for the PR."
         if (get_settings().config.publish_output and
                 get_settings().pr_code_suggestions.get('publish_output_no_suggestions', True)):
             get_logger().warning('No code suggestions found for the PR.')

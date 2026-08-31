@@ -19,10 +19,12 @@ from pr_agent.algo.skills_loader import get_skills_context
 from pr_agent.algo.repo_context import build_repo_context
 from pr_agent.algo.token_handler import TokenHandler
 from pr_agent.algo.utils import (ModelType, PRReviewHeader,
+                                 STARVED_DIFF_HEADER,
                                  convert_to_markdown_v2, get_max_tokens,
                                  github_action_output,
                                  load_yaml, parse_requirement_items,
-                                 show_relevant_configurations)
+                                 show_relevant_configurations,
+                                 starved_diff_comment)
 from pr_agent.config_loader import get_settings
 from pr_agent.git_providers import (get_git_provider,
                                     get_git_provider_with_context)
@@ -214,6 +216,7 @@ class PRReviewer:
             await retry_with_fallback_models(self._prepare_prediction, model_type=ModelType.REGULAR)
             if not self.prediction:
                 self.git_provider.remove_initial_comment()
+                self._publish_starved_diff_notice()
                 return None
 
             pr_review = self._prepare_pr_review()
@@ -243,6 +246,31 @@ class PRReviewer:
             get_logger().error(f"Failed to review PR: {e}")
             if get_settings().config.get("propagate_tool_errors", False):
                 raise
+
+    def _publish_starved_diff_notice(self) -> None:
+        """Say on the pull request that the diff never reached the model.
+
+        Only fires when pruning emptied the diff, which the token handler records. An empty
+        prediction has other causes -- a model that answered nothing, a parse failure -- and those
+        are not this message, so they keep the existing behaviour of publishing nothing.
+        """
+        report = getattr(self.token_handler, "starved_diff", None)
+        if not report:
+            return
+        if not get_settings().config.publish_output:
+            return
+
+        try:
+            self.git_provider.publish_persistent_comment(
+                starved_diff_comment(report, "/review"),
+                initial_header=STARVED_DIFF_HEADER,
+                update_header=False,
+                final_update_message=False,
+            )
+        except Exception as e:
+            # The notice is a courtesy on top of an already-failed run. Losing it must not turn a
+            # missing review into an exception the caller has to handle.
+            get_logger().error(f"Failed to publish the starved-diff notice: {e}")
 
     def _should_publish_review_no_suggestions(self, pr_review: str) -> bool:
         return get_settings().pr_reviewer.get('publish_output_no_suggestions', True) or "No major issues detected" not in pr_review
