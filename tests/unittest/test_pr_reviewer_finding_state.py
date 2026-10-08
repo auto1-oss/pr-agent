@@ -167,6 +167,45 @@ def test_prepare_review_reconciles_previous_state_and_renders_resolved_section(m
     assert settings.pr_reviewer.persistent_finding_state is True
 
 
+@pytest.mark.parametrize("malformed_issue", [False, True], ids=["low-confidence-inferred", "malformed"])
+def test_filtered_review_preserves_active_finding(monkeypatch, malformed_issue):
+    settings = _settings(monkeypatch)
+    monkeypatch.setattr(settings.pr_reviewer, "num_max_findings", 5)
+    monkeypatch.setattr(settings.pr_reviewer, "findings_filter_mode", "drop_low_confidence_inferred")
+    issue = {
+        "relevant_file": "app.py", "issue_header": "Lock leak",
+        "issue_content": "The lock is never released.", "start_line": 2, "end_line": 2,
+        "confidence": "medium", "evidence_type": "inferred",
+    }
+    previous = reconcile_review_findings(
+        None, [PRReviewer._review_finding_from_issue(issue)], allow_resolution=True,
+        head_sha="head-1", timestamp="2026-01-01T00:00:00Z",
+    ).state
+    provider = MagicMock()
+    provider.last_commit_id = "head-2"
+    provider.get_issue_comments.return_value = [SimpleNamespace(
+        body=f"{PRReviewHeader.REGULAR.value} 🔍\n\nold review\n\n{serialize_review_state(previous)}",
+    )]
+    provider.get_diff_files.return_value = []
+    provider.is_supported.side_effect = lambda capability: capability == "get_issue_comments"
+    reviewer = _reviewer(provider)
+    reviewer.findings_metadata = True
+    reported_issue = None if malformed_issue else dict(issue, confidence="low")
+
+    with (
+        patch("pr_agent.tools.pr_reviewer.load_yaml",
+              return_value={"review": {"key_issues_to_review": [reported_issue]}}),
+        patch("pr_agent.tools.pr_reviewer.github_action_output"),
+        patch("pr_agent.tools.pr_reviewer.convert_to_markdown_v2", return_value="No major issues detected"),
+    ):
+        review = reviewer._prepare_pr_review()
+
+    assert reviewer._review_state_result.state["findings"][0]["state"] == "ACTIVE"
+    assert reviewer._review_state_result.state["last_run"]["complete"] is False
+    assert "<summary>✅ Resolved findings</summary>" not in review
+    assert reviewer._review_state_result.resolved_ids == ()
+
+
 def test_prepare_review_same_head_absence_preserves_active_finding(monkeypatch):
     _settings(monkeypatch)
     previous = reconcile_review_findings(

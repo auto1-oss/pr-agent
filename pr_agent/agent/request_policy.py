@@ -30,6 +30,10 @@ def enforce_request_policy(pr_url) -> bool:
     from pr_agent.servers.utils import should_process_pr_logic
 
     required = {field for field, rule in RULE_FIELDS.items() if get_settings().get(f"config.{rule}", [])}
+    is_auto_command = get_settings().get("config.is_auto_command", False)
+    # Explicit commands override title-based automation filters.
+    if not is_auto_command:
+        required.discard("title")
     if not required:
         return True
     from pr_agent.git_providers import get_git_provider_with_context
@@ -37,6 +41,8 @@ def enforce_request_policy(pr_url) -> bool:
     try:
         provider = get_git_provider_with_context(pr_url)
         metadata = provider.get_request_policy_metadata(required)
+        if not is_auto_command:
+            metadata = dict(metadata, title=None)
         # Missing/None fields leave only their own rules unevaluated. The shared
         # matcher keeps checking the other fields and retains its error fallback.
         if not should_process_pr_logic(**metadata):

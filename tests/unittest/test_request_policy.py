@@ -38,6 +38,7 @@ def environment(monkeypatch):
 ])
 async def test_ignored_request_returns_skip_before_tool_notify_and_followup(environment, monkeypatch, rule, value):
     settings, _ = environment
+    settings.set("config.is_auto_command", True)
     settings.set(f"config.{rule}", [value])
     tool, notify, after, cleanup = Mock(), Mock(), Mock(), Mock()
     monkeypatch.setitem(agent.command2class, "review", tool)
@@ -58,6 +59,43 @@ async def test_ignored_request_returns_skip_before_tool_notify_and_followup(envi
     after.assert_not_called()
     cleanup.assert_called_once()
     agent.flush_telemetry.assert_called_once()
+
+
+@pytest.mark.parametrize("automatic", [False, True], ids=["manual", "automatic"])
+@pytest.mark.parametrize("command", ["review", "improve", "ask"])
+async def test_title_ignore_applies_only_to_automatic_commands(environment, monkeypatch, automatic, command):
+    settings, provider = environment
+    settings.set("config.is_auto_command", automatic)
+    settings.set("config.ignore_pr_title", ["^Auto"])
+    settings.set("config.ignore_pr_labels", ["do-not-review"])
+    provider.get_request_policy_metadata.return_value = dict(METADATA, title="Autoscaling: raise min tasks")
+    tool, notify = SimpleNamespace(run=AsyncMock()), Mock()
+    monkeypatch.setitem(agent.command2class, command, Mock(return_value=tool))
+
+    result = await agent.PRAgent().handle_request(URL, f"/{command}", notify=notify)
+
+    if automatic:
+        assert result is RequestOutcome.SKIPPED
+        tool.run.assert_not_awaited()
+        notify.assert_not_called()
+    else:
+        assert result is True
+        tool.run.assert_awaited_once()
+        notify.assert_called_once()
+
+
+async def test_manual_title_override_still_respects_other_ignore_rules(environment, monkeypatch):
+    settings, provider = environment
+    settings.set("config.is_auto_command", False)
+    settings.set("config.ignore_pr_title", ["^Auto"])
+    settings.set("config.ignore_pr_labels", ["skip"])
+    provider.get_request_policy_metadata.return_value = dict(METADATA, title="Autoscaling: raise min tasks")
+    tool, notify = SimpleNamespace(run=AsyncMock()), Mock()
+    monkeypatch.setitem(agent.command2class, "review", Mock(return_value=tool))
+
+    assert await agent.PRAgent().handle_request(URL, "/review", notify=notify) is RequestOutcome.SKIPPED
+    tool.run.assert_not_awaited()
+    notify.assert_not_called()
 
 
 @pytest.mark.parametrize("failure", [False, True])
@@ -88,6 +126,7 @@ async def test_repo_settings_are_loaded_before_policy_and_argument_overrides(env
 @pytest.mark.parametrize("title_matches", [False, True])
 async def test_unavailable_author_skips_only_author_rule(environment, monkeypatch, missing_form, title_matches):
     settings, provider = environment
+    settings.set("config.is_auto_command", True)
     settings.set("config.ignore_pr_authors", ["author"])
     settings.set("config.ignore_pr_title", ["^Regular" if title_matches else "^Unmatched$"])
     metadata = METADATA.copy()
@@ -113,6 +152,7 @@ async def test_unavailable_author_skips_only_author_rule(environment, monkeypatc
 @pytest.mark.parametrize("failure_at", ["provider", "metadata"])
 async def test_policy_lookup_error_allows_command(environment, monkeypatch, failure_at):
     settings, provider = environment
+    settings.set("config.is_auto_command", True)
     settings.set("config.ignore_pr_title", ["Regular"])
     if failure_at == "provider":
         monkeypatch.setattr(git_providers, "get_git_provider_with_context", Mock(side_effect=RuntimeError("outage")))
@@ -130,6 +170,7 @@ async def test_policy_lookup_error_allows_command(environment, monkeypatch, fail
 async def test_provider_without_metadata_uses_empty_default(environment, monkeypatch):
     from pr_agent.git_providers.git_provider import GitProvider
     settings, provider = environment
+    settings.set("config.is_auto_command", True)
     settings.set("config.ignore_pr_title", ["Regular"])
     provider.get_request_policy_metadata.side_effect = (
         lambda fields: GitProvider.get_request_policy_metadata(None, fields))

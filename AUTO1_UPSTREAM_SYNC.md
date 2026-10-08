@@ -18,11 +18,19 @@ The fork merges `The-PR-Agent/pr-agent` main at `0fe355ac46d3ed39cb6c35457818c4f
 
 ## Validation
 
+Persistent finding tracking is enabled upstream. AUTO1 filtering now contributes to its dropped-finding guard: a run that suppresses findings cannot mark previously active findings as resolved merely because they disappeared from the displayed list.
+
+Manual commands continue to work on titles matching `config.ignore_pr_title` (for example, `Autoscaling: ...`), as explicitly requested for AUTO1. Upstream now ignores these commands; the fork limits the title rule to automatic runs. Other ignore rules still apply to manual commands.
+
+Other incoming operational changes include a 5 MiB webhook-body limit, a notice instead of a partial review for GitHub PRs with more than 3,000 files, and fallback restricted to API, timeout, or explicitly fallback-eligible errors. Persistent finding state also depends on resolving the GitHub App identity through `GET /app`; an identity lookup failure skips state tracking.
+
 Validation results are recorded in the ticket workspace handoff. The checks include the full upstream/fork unit suite, package distribution tests, source lint, and companion settings/runtime compatibility tests.
 
 Docker image builds and live GitHub/Jira/model-gateway behavior require separate verification: the local Docker daemon is unavailable, and this task does not deploy or exercise production integrations. Passing local tests is not a guarantee against every production regression.
 
 The documentation build is blocked at dependency installation: AUTO1's npm registry rejects `shell-quote@1.12.0` with HTTP 403, "version in cooldown". Built-site URL checks are consequently unverified. The generated npm lockfile is included in the pre-commit large-file exemption alongside `uv.lock`.
+
+Image-build follow-up must confirm registry access for `uv` and the Python 3.14 logging dependency. The ECS formatter, record conversion, and JSON sink are unchanged from the settings repository's original base; local logging checks pass, but live ECS output has not been checked. Exact Anthropic token counting now uses the configured gateway and falls back to estimation on errors; an unresponsive count endpoint can wait for the configured AI timeout (600 seconds). Gateway support has not been verified.
 
 ## Local patch reconciliation
 

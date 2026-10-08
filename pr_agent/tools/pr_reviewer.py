@@ -837,7 +837,7 @@ class PRReviewer:
                 return value - len(update_suffix) - identity_overhead
         return None
 
-    def _prepare_review_finding_state(self, data: dict) -> None:
+    def _prepare_review_finding_state(self, data: dict, *, dropped_findings: bool = False) -> None:
         self._review_state_result = None
         self._review_state_blocked = False
         self._review_state_block_reason = None
@@ -878,7 +878,7 @@ class PRReviewer:
         except (TypeError, ValueError):
             max_findings = 0
         reported_issues = data["review"].get("key_issues_to_review")
-        dropped_findings = (
+        dropped_findings = dropped_findings or (
             isinstance(reported_issues, list)
             and len(current_findings) < len(reported_issues)
         )
@@ -1326,6 +1326,7 @@ class PRReviewer:
         if self.prediction_data is None:
             self._validate_review_schema(data)
 
+        unfiltered_data = data
         data = normalize_review_output(
             data,
             max_findings=get_settings().pr_reviewer.num_max_findings,
@@ -1369,7 +1370,12 @@ class PRReviewer:
             self.vars.get("ticket_compliance_note", ""),
             build_suspected_ticket_mismatch_note(data['review'].get('ticket_compliance_check')),
         )
-        self._prepare_review_finding_state(data)
+        reported_issues = unfiltered_data["review"].get("key_issues_to_review")
+        dropped_findings = (
+            isinstance(reported_issues, list)
+            and len(data["review"]["key_issues_to_review"]) < len(reported_issues)
+        )
+        self._prepare_review_finding_state(data, dropped_findings=dropped_findings)
         if get_settings().config.publish_output and get_settings().pr_reviewer.get('inline_key_issues', False):
             data = self._publish_key_issues_as_inline_comments(data)
 
