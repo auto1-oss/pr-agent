@@ -4,13 +4,13 @@ Deployment assets for running **PR-Agent** as a [MOSAICO](https://mosaico-projec
 *solution agent*. This directory contains no Python and no pr-agent source — it consumes
 PR-Agent as a published, version-pinned Docker image. The agent's source lives in
 [`The-PR-Agent/pr-agent`](https://github.com/The-PR-Agent/pr-agent), under `pr_agent/mosaico/`;
-it is merged into `main` and ships in every release wheel and image starting at `v0.37.0`.
+it is merged into `main` and ships in every release wheel and image starting at `v0.36.0`.
 
 ## Relationship to the PR-Agent repository
 
 This is not a fork and it never becomes one:
 
-- The MOSAICO A2A server is PR-Agent code, released in tags `v0.37.0` onwards. This bundle
+- The MOSAICO A2A server is PR-Agent code, released in tags `v0.36.0` onwards. This bundle
   holds zero Python — only a compose overlay, a registration template, an env template, a
   smoke test, and this README.
 - **Staying current is one line**: bump the pinned tag in `docker-compose.pr-agent.yml`, then
@@ -63,6 +63,28 @@ Expect a card whose top level carries `name: "PR-Agent Solution Agent"` and `ver
 the image tag's version (it is derived from the running build, never hand-maintained), with
 skills `review`, `improve`, `describe`, `ask`, and the required
 `https://mosaico-project.eu/extensions/mosaico-observability` extension.
+
+### Caller authentication and request limits
+
+Configure `MOSAICO__BEARER_TOKENS='@json {"reference-agent":"replace-with-generated-secret"}'`
+in the agent's secret environment to require bearer authentication for JSON-RPC and the
+live `/health` probe. Each configured principal has a distinct secret and its own tasks,
+histories and artifacts. The public agent card advertises this requirement. Configure the
+reference caller to send `Authorization: Bearer <secret>` over your HTTPS ingress.
+The default empty map permits anonymous shared ownership; use it only on a trusted,
+single-tenant network.
+
+For `smoke_test.sh`, also set the client-side `MOSAICO_BEARER_TOKEN` in the script's environment.
+For the overlay, add the server's `MOSAICO__BEARER_TOKENS` to the service environment through
+your secret configuration, and set `PR_AGENT_BEARER_TOKEN` for its healthcheck. The reference
+caller needs its own credential configuration. Missing/invalid credentials produce HTTP 401;
+the agent-card GET remains public. Anonymous-mode probes need no token.
+
+The shared `config.max_webhook_request_body_bytes` cap defaults to 5 MiB and returns HTTP 413
+before parsing oversized bodies. `mosaico.routing_scan_max_chars` defaults to 65536 characters
+for PR URL and command detection per segment; put those near the start of a message or its
+surrounding prose. Diffs remain complete. Invalid observability UUIDs are ignored individually.
+These controls do not impose task eviction, request rates, concurrency quotas or health caching.
 
 ### `AGENT_CARD_HOST` / `AGENT_CARD_PORT` — the one thing to get right
 
@@ -132,9 +154,22 @@ Two outcomes:
 ## Troubleshooting
 
 - **Container stays `unhealthy`, registration never runs.** `/health` is a live LLM probe and
-  returns `503` on bad/missing credentials — this is intended (the healthcheck matches the
-  peer solution agents' probe verbatim, and a registered card backed by a dead LLM is worse
-  than no registration). Check `API_BASE`/`API_KEY`/`MODEL_NAME`, not the compose file.
+  returns `503` on bad/missing credentials — this is intended: a registered card backed by
+  a dead LLM is worse than no registration. Images with health-probe hardening return
+  `Unhealthy: LLM probe failed` for provider failures. The health check's own warning logs only the exception type,
+  not the provider's error text.
+  `mosaico.health_timeout_seconds` sets the deadline for cooperative asynchronous work
+  (default: 10 seconds; must be a finite positive number). Synchronous
+  handler construction and blocking SDK work can still exceed it. Existing image tags may
+  predate this behavior and expose provider error details.
+  Set `MOSAICO__HEALTH_TIMEOUT_SECONDS` in the agent container's environment to override
+  the default; with Compose, add it to the service's `environment` mapping.
+  Invalid values make `/health` return the generic unhealthy response (503), not the default timeout.
+  The bundled Compose probe has its own 25-second HTTP timeout. Stream cleanup may continue
+  after `/health` times out without delaying its unhealthy response; it has no separate
+  wait budget or local stream admission limit. Allow a margin over the health timeout in
+  the HTTP timeout and Docker's `healthcheck.timeout` so registration can run.
+  Check `API_BASE`/`API_KEY`/`MODEL_NAME`, not the compose file.
 - **Agent registers but the reference agent never reaches it.** The advertised card URL is
   `localhost`; see the `AGENT_CARD_HOST`/`AGENT_CARD_PORT` section above.
 - **The registration container itself can't fetch the agent card.** `01-compose.sh` falls back

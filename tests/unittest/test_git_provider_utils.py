@@ -90,7 +90,7 @@ def test_apply_repo_settings_attributes_global_error_and_still_applies_local(mon
         assert settings.pr_reviewer.extra_instructions == "local-applied"
         # One error comment, attributed to global, with the global content redacted (not echoed).
         assert len(provider.comments) == 1
-        assert "global `pr-agent-settings` settings repository" in provider.comments[0]
+        assert "global settings repository (`config.global_settings_repo`)" in provider.comments[0]
         assert "unclosed_section" not in provider.comments[0]
     finally:
         settings.pr_reviewer.extra_instructions = original_extra_instructions
@@ -112,6 +112,8 @@ def test_handle_configurations_errors_uses_persistent_comment_when_supported():
     assert comment["final_update_message"] is False
     assert "PR-Agent failed to apply 'local' repo settings" in comment["body"]
     assert "Invalid value" in comment["body"]
+    assert "https://docs.pr-agent.ai/usage-guide/configuration_options/" in comment["body"]
+    assert "qodo-merge-docs.qodo.ai" not in comment["body"]
     assert "```toml\n[config]\nmodel =\n```" in comment["body"]
     assert "<details><summary>Configuration content:</summary>" in comment["body"]
 
@@ -176,7 +178,7 @@ def test_handle_configurations_errors_publishes_each_error():
     assert "First error" in provider.comments[0]
     assert "[config]\nmodel =" in provider.comments[0]
     assert "Second error" in provider.comments[1]
-    assert "global `pr-agent-settings` settings repository" in provider.comments[1]
+    assert "global settings repository (`config.global_settings_repo`)" in provider.comments[1]
     assert "dummy-value" not in provider.comments[1]
     assert "num_max_findings" not in provider.comments[1]
 

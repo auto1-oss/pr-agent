@@ -1,5 +1,4 @@
-from pr_agent.tools.pr_reviewer import append_ticket_compliance_note
-from pr_agent.tools.pr_reviewer import build_suspected_ticket_mismatch_note
+from pr_agent.tools.pr_reviewer import append_ticket_compliance_note, build_suspected_ticket_mismatch_note
 
 
 def test_append_ticket_compliance_note():

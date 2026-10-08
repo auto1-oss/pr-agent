@@ -130,8 +130,8 @@ def test_pr_reviewer_initial_vars_ignore_cached_related_tickets(monkeypatch):
         def __init__(self):
             self.main_pr_language = None
 
-    from pr_agent.config_loader import get_settings
     import pr_agent.tools.pr_reviewer as pr_reviewer_module
+    from pr_agent.config_loader import get_settings
 
     settings = get_settings()
     settings_snapshot = snapshot_settings(["related_tickets"])
