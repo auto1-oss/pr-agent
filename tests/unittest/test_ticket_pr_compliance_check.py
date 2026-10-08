@@ -1,15 +1,28 @@
 import asyncio
 
+import pytest
 from jinja2 import Environment, StrictUndefined
 
 from pr_agent.config_loader import get_settings
 from pr_agent.tools import ticket_pr_compliance_check
+from tests.unittest._settings_helpers import restore_settings, snapshot_settings
+
+
+@pytest.fixture(autouse=True)
+def jira_configuration(monkeypatch):
+    snapshot = snapshot_settings(["ticket_compliance_note", "related_tickets"])
+    monkeypatch.setenv("JIRA_BASE_URL", "https://example.atlassian.net")
+    yield
+    restore_settings(snapshot)
 
 
 class FakeGitProvider:
     def __init__(self, title: str, branch: str):
         self.pr = type("PR", (), {"title": title})()
         self._branch = branch
+
+    def get_user_description(self):
+        return ""
 
     def get_pr_branch(self):
         return self._branch
@@ -57,7 +70,7 @@ def test_extract_tickets_prefers_title_ticket_on_mismatch(monkeypatch):
 
     monkeypatch.setattr(ticket_pr_compliance_check, "fetch_jira_ticket_context", fake_fetch_jira_ticket_context)
 
-    tickets, note = asyncio.run(
+    tickets = asyncio.run(
         ticket_pr_compliance_check.extract_tickets(
             FakeGitProvider(
                 "FAKE-1234 add sample feature flow",
@@ -66,6 +79,7 @@ def test_extract_tickets_prefers_title_ticket_on_mismatch(monkeypatch):
         )
     )
 
+    note = get_settings().get("ticket_compliance_note", "")
     assert [ticket["ticket_id"] for ticket in tickets] == ["FAKE-1234"]
     assert "FAKE-1234" in note
     assert "MOCK-5678" in note
@@ -74,10 +88,8 @@ def test_extract_tickets_prefers_title_ticket_on_mismatch(monkeypatch):
 
 def test_extract_and_cache_pr_tickets_preserves_cached_ticket_note(monkeypatch):
     async def fake_extract_tickets(_git_provider):
-        return (
-            [{"ticket_id": "FAKE-5678", "ticket_url": "https://example.com/FAKE-5678", "title": "Ticket"}],
-            "cached note",
-        )
+        get_settings().set("ticket_compliance_note", "cached note")
+        return [{"ticket_id": "FAKE-5678", "ticket_url": "https://example.com/FAKE-5678", "title": "Ticket"}]
 
     monkeypatch.setattr(ticket_pr_compliance_check, "extract_tickets", fake_extract_tickets)
 
@@ -127,7 +139,7 @@ def test_extract_tickets_preserves_title_fetch_note_on_mismatch(monkeypatch):
 
     monkeypatch.setattr(ticket_pr_compliance_check, "fetch_jira_ticket_context", fake_fetch_jira_ticket_context)
 
-    tickets, note = asyncio.run(
+    tickets = asyncio.run(
         ticket_pr_compliance_check.extract_tickets(
             FakeGitProvider(
                 "FAKE-1234 add sample feature flow",
@@ -136,6 +148,7 @@ def test_extract_tickets_preserves_title_fetch_note_on_mismatch(monkeypatch):
         )
     )
 
+    note = get_settings().get("ticket_compliance_note", "")
     assert [ticket["ticket_id"] for ticket in tickets] == ["FAKE-1234"]
     assert "Title ticket note" in note
     assert "MOCK-5678" not in note
@@ -161,7 +174,7 @@ def test_extract_tickets_preserves_title_failure_note_on_mismatch(monkeypatch):
 
     monkeypatch.setattr(ticket_pr_compliance_check, "fetch_jira_ticket_context", fake_fetch_jira_ticket_context)
 
-    tickets, note = asyncio.run(
+    tickets = asyncio.run(
         ticket_pr_compliance_check.extract_tickets(
             FakeGitProvider(
                 "FAKE-1234 add sample feature flow",
@@ -170,6 +183,7 @@ def test_extract_tickets_preserves_title_failure_note_on_mismatch(monkeypatch):
         )
     )
 
+    note = get_settings().get("ticket_compliance_note", "")
     assert tickets is None
     assert "FAKE-1234" in note
     assert "MOCK-5678" in note
@@ -179,18 +193,18 @@ def test_extract_tickets_preserves_title_failure_note_on_mismatch(monkeypatch):
 
 def test_extract_and_cache_pr_tickets_normalizes_sub_issues_for_prompt_rendering(monkeypatch):
     async def fake_extract_tickets(_git_provider):
-        return (
-            [
+        get_settings().set("ticket_compliance_note", "cached note")
+        return [
                 {
                     "ticket_id": "FAKE-5678",
                     "ticket_url": "https://example.com/FAKE-5678",
                     "title": "Parent ticket",
                     "body": "",
-                    "sub_issues": [{"ticket_url": "https://example.com/FAKE-5679", "title": "Child ticket", "body": ""}],
+                    "sub_issues": [
+                        {"ticket_url": "https://example.com/FAKE-5679", "title": "Child ticket", "body": ""}
+                    ],
                 }
-            ],
-            "cached note",
-        )
+            ]
 
     monkeypatch.setattr(ticket_pr_compliance_check, "extract_tickets", fake_extract_tickets)
 
@@ -207,24 +221,9 @@ def test_extract_and_cache_pr_tickets_normalizes_sub_issues_for_prompt_rendering
         vars = {}
         asyncio.run(ticket_pr_compliance_check.extract_and_cache_pr_tickets(object(), vars))
 
-        assert vars["related_tickets"] == [
-            {
-                "ticket_id": "",
-                "ticket_url": "https://example.com/FAKE-5679",
-                "title": "Child ticket",
-                "body": "",
-                "labels": "",
-                "requirements": "",
-            },
-            {
-                "ticket_id": "FAKE-5678",
-                "ticket_url": "https://example.com/FAKE-5678",
-                "title": "Parent ticket",
-                "body": "",
-                "labels": "",
-                "requirements": "",
-            },
-        ]
+        assert [ticket["title"] for ticket in vars["related_tickets"]] == ["Parent ticket", "Child ticket"]
+        assert vars["related_tickets"][1]["parent_ticket_url"] == "https://example.com/FAKE-5678"
+        assert all(ticket["labels"] == "" for ticket in vars["related_tickets"])
         assert _render_pr_description_prompt(vars["related_tickets"])
     finally:
         settings.set("pr_reviewer.require_ticket_analysis_review", previous_require_ticket_analysis)
@@ -234,7 +233,8 @@ def test_extract_and_cache_pr_tickets_normalizes_sub_issues_for_prompt_rendering
 
 def test_extract_and_cache_pr_tickets_skips_empty_tickets(monkeypatch):
     async def fake_extract_tickets(_git_provider):
-        return ([{}, {"sub_issues": [{}]}], "cached note")
+        get_settings().set("ticket_compliance_note", "cached note")
+        return [{}, {"sub_issues": [{}]}]
 
     monkeypatch.setattr(ticket_pr_compliance_check, "extract_tickets", fake_extract_tickets)
 

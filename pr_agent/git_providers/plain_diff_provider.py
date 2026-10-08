@@ -1,9 +1,15 @@
+import json
 import os
+import sys
 from collections import Counter
 from typing import List, Optional
 
 from unidiff.errors import UnidiffParseError
 
+from pr_agent.agent.request_policy import policy_metadata
+from pr_agent.algo.comment_identity import format_pr_code_suggestions_header
+from pr_agent.algo.language_handler import build_language_file_matcher
+from pr_agent.algo.run_output import show_run_details
 from pr_agent.algo.types import FilePatchInfo
 from pr_agent.config_loader import _find_repository_root, get_settings
 from pr_agent.git_providers.diff_parsing import parse_unified_diff, reconstruct_base_file, to_hunk_only_patch
@@ -20,10 +26,15 @@ class PullRequestMimic:
 class PlainDiffGitProvider(GitProvider):
     """Provider that reviews a raw unified diff (stdin/file), no hosting platform.
 
-    The diff text and optional output path are read from global settings
-    (plain_diff.content, plain_diff.output_path). The pr_url arg is an ignored
-    sentinel.
+    Read the diff text and optional output paths from global settings
+    (plain_diff.content, plain_diff.output_path, plain_diff.json_output_path).
+    Treat the pr_url arg as an ignored sentinel.
     """
+
+    def get_request_policy_metadata(self, required_fields: set[str]) -> dict:
+        # A supplied patch has no PR metadata; its display title is not a PR title.
+        return policy_metadata(title=None, sender="", repo_full_name="",
+                               source_branch="", target_branch="")
 
     def __init__(self, pr_url=None, incremental=False):
         diff_text = get_settings().get("plain_diff.content", None)
@@ -31,6 +42,7 @@ class PlainDiffGitProvider(GitProvider):
             raise ValueError("No diff content provided for the 'plain-diff' git provider")
         self.diff_text = diff_text
         self.output_path = get_settings().get("plain_diff.output_path", None)
+        self.json_output_path = get_settings().get("plain_diff.json_output_path", None)
         # cli.run() already forces config.publish_output=True, but apply_repo_settings()
         # runs afterwards and can overwrite it back to False from an extra/repo config
         # (tools gate all publishing on this flag). This provider is constructed after
@@ -101,7 +113,18 @@ class PlainDiffGitProvider(GitProvider):
         incremental.is_incremental = False
 
     def _write_output(self, content: str):
-        print(content)
+        try:
+            print(content)
+        except UnicodeEncodeError:
+            # Emit UTF-8 bytes when a redirected stdout uses a locale encoding (cp1252 on
+            # Windows) that cannot encode the emoji in tool output, so publishing does not
+            # abort before --output is written.
+            buffer = getattr(sys.stdout, "buffer", None)
+            if buffer is None:
+                raise
+            sys.stdout.flush()
+            buffer.write((content + "\n").encode("utf-8"))
+            buffer.flush()
         if self.output_path:
             # --output is always an explicit user request, so a write failure
             # must surface (fail fast) rather than be silently swallowed.
@@ -117,14 +140,31 @@ class PlainDiffGitProvider(GitProvider):
             return  # don't emit "Preparing review..." placeholders to stdout
         self._write_output(pr_comment)
 
+    def supports_comment_publish_confirmation(self) -> bool:
+        return False
+
+    def publish_structured_review(self, review: dict):
+        if not self.json_output_path:
+            return
+        try:
+            with open(self.json_output_path, "w", encoding="utf-8") as fh:
+                json.dump(review, fh, indent=2)
+                fh.write("\n")
+        except (OSError, TypeError, ValueError) as e:
+            get_logger().error(f"Failed to write structured review to {self.json_output_path}: {e}")
+            raise
+
     def publish_description(self, pr_title: str, pr_body: str):
         self._write_output(f"{pr_title}\n\n{pr_body}")
 
     def is_supported(self, capability: str) -> bool:
         if capability in ["get_issue_comments", "create_inline_comment",
-                          "publish_inline_comments", "publish_file_comments",
-                          "get_labels"]:
+                          "publish_inline_comments",
+                          "get_labels", "edit_comment", "remove_comment"]:
             return False
+        return True
+
+    def supports_code_suggestions_artifact(self) -> bool:
         return True
 
     def get_languages(self):
@@ -132,20 +172,16 @@ class PlainDiffGitProvider(GitProvider):
         # sort_files_by_main_languages() keys on language NAMES (it maps each
         # name back to its extensions), so returning raw extensions here would
         # drop every file into the "Other" bucket and disable language-based
-        # hunk prioritization. Invert the settings map (name -> [extensions])
-        # into an extension -> name lookup; files with unknown extensions are
-        # left out and fall through to "Other" downstream.
-        ext_to_lang = {}
+        # hunk prioritization. Use the shared filename matcher so full names,
+        # multipart suffixes, and case-sensitive extensions behave consistently.
         lang_map = get_settings().get("language_extension_map_org", {}) or {}
-        for language, extensions in lang_map.items():
-            for ext in extensions:
-                ext_to_lang.setdefault(ext.lower().lstrip("*"), language)
+        get_language = build_language_file_matcher(lang_map)
 
         lang_count = Counter()
         for f in self.get_diff_files():
             if not f.filename:
                 continue
-            language = ext_to_lang.get(os.path.splitext(f.filename)[1].lower())
+            language = get_language(f.filename)
             if language:
                 lang_count[language] += 1
 
@@ -165,17 +201,24 @@ class PlainDiffGitProvider(GitProvider):
         return ""
 
     # ---- code suggestions: rendered to stdout/--output (no hosting platform) ----
-    def publish_code_suggestion(self, body: str, relevant_file: str,
-                                relevant_lines_start: int, relevant_lines_end: int):
-        location = f"{relevant_file}:{relevant_lines_start}-{relevant_lines_end}"
-        self._write_output(f"### {location}\n\n{body}")
-
     def publish_code_suggestions(self, code_suggestions: list) -> bool:
         # The 'improve' tool calls this unconditionally; render the suggestions
         # as a single markdown document to stdout/--output instead of pushing
         # them to a (non-existent) hosting platform.
         if not code_suggestions:
             return True
+        return self.publish_code_suggestions_artifact(code_suggestions)
+
+    def publish_code_suggestions_artifact(
+            self, code_suggestions: list, artifact_footer: str = "",
+            no_suggestions_message: str = "No code suggestions found for the PR.") -> bool:
+        if not code_suggestions:
+            content = f"{format_pr_code_suggestions_header()}\n\n{no_suggestions_message}{artifact_footer}"
+            if get_settings().get("config.output_run_details", False):
+                content += show_run_details(self.is_supported("gfm_markdown"))
+            self._write_output(content)
+            return True
+
         sections = ["## Code suggestions", ""]
         for s in code_suggestions:
             relevant_file = s.get("relevant_file", "")
@@ -186,7 +229,8 @@ class PlainDiffGitProvider(GitProvider):
                 sections.append(f"### {location}")
             sections.append(s.get("body", ""))
             sections.append("")
-        self._write_output("\n".join(sections).rstrip() + "\n")
+        content = "\n".join(sections).rstrip() + artifact_footer + "\n"
+        self._write_output(content)
         return True
 
     # ---- unsupported publish operations (no-op or NotImplementedError) ----
@@ -207,12 +251,12 @@ class PlainDiffGitProvider(GitProvider):
         pass
 
     def add_eyes_reaction(self, issue_comment_id: int, disable_eyes: bool = False) -> Optional[int]:
-        pass
+        return None
 
     def remove_reaction(self, issue_comment_id: int, reaction_id: int) -> bool:
-        pass
+        return True
 
-    def get_commit_messages(self):
+    def get_commit_messages(self) -> str:
         return ""
 
     def get_repo_settings(self):

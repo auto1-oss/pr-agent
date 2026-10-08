@@ -2,7 +2,6 @@ import re
 
 from pr_agent.algo.types import EDIT_TYPE, FilePatchInfo
 
-
 FILE_HEADER_PATTERN = r'^## File: (?:\'([^\']+)\'|"([^\"]+)")$'
 
 

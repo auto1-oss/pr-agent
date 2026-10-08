@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -19,6 +20,8 @@ async def test_analyze_self_reflection_response_carries_metadata(monkeypatch):
     monkeypatch.setattr("pr_agent.tools.pr_code_suggestions.get_settings", lambda: fake_settings)
 
     tool = PRCodeSuggestions.__new__(PRCodeSuggestions)
+    tool.findings_metadata = False
+    tool.small_file_context = False
     tool.findings_metadata = True
     tool.validate_one_liner_suggestion_not_repeating_code = lambda suggestion: suggestion
 
@@ -69,6 +72,8 @@ def test_normalize_code_suggestions_output_uses_filter_mode(monkeypatch):
     monkeypatch.setattr("pr_agent.tools.pr_code_suggestions.get_settings", lambda: fake_settings)
 
     tool = PRCodeSuggestions.__new__(PRCodeSuggestions)
+    tool.findings_metadata = False
+    tool.small_file_context = False
     tool.findings_metadata = True
 
     data = {
@@ -97,6 +102,8 @@ def test_normalize_code_suggestions_output_uses_filter_mode(monkeypatch):
 
 def test_append_small_file_context_to_diff_lists_skips_when_legacy_no_line_numbers_missing():
     tool = PRCodeSuggestions.__new__(PRCodeSuggestions)
+    tool.findings_metadata = False
+    tool.small_file_context = False
     tool.small_file_context = True
     tool.patches_diff_list = ["## File: 'src/example.py'"]
 
@@ -107,7 +114,8 @@ def test_append_small_file_context_to_diff_lists_skips_when_legacy_no_line_numbe
 
 @pytest.mark.asyncio
 async def test_prepare_prediction_main_refreshes_no_line_chunks_after_fallback(monkeypatch):
-    fake_settings = SimpleNamespace(
+    fake_settings = FakeSection(
+        config=FakeSection(publish_output_progress=False),
         pr_code_suggestions=FakeSection(
             decouple_hunks=False,
             max_number_of_calls=3,
@@ -119,7 +127,18 @@ async def test_prepare_prediction_main_refreshes_no_line_chunks_after_fallback(m
     monkeypatch.setattr("pr_agent.tools.pr_code_suggestions.get_settings", lambda: fake_settings)
 
     tool = PRCodeSuggestions.__new__(PRCodeSuggestions)
-    tool.git_provider = object()
+    tool.findings_metadata = False
+    tool.small_file_context = False
+    tool.git_provider = MagicMock()
+    tool.git_provider.supports_check_runs.return_value = False
+    tool.ai_handler = MagicMock()
+    tool.vars = {}
+    tool.pr_code_suggestions_prompt_system = "system"
+    tool.pr_code_suggestions_prompt_user = "{{ diff }}"
+    budget = MagicMock()
+    monkeypatch.setattr(
+        "pr_agent.tools.pr_code_suggestions.AttemptTokenBudget.for_prompt_attempt", lambda *a, **kw: budget,
+    )
     tool.token_handler = object()
     tool.small_file_context = False
     tool.findings_metadata = False
@@ -131,7 +150,7 @@ async def test_prepare_prediction_main_refreshes_no_line_chunks_after_fallback(m
         calls.append((patches_diff, patches_diff_no_line_numbers))
         return {"code_suggestions": [{"score": 1}]}
 
-    async def fake_convert(_patches_diff_list_no_line_numbers, _model):
+    async def fake_convert(_patches_diff_list_no_line_numbers, _model, **kwargs):
         return []
 
     tool._get_prediction = fake_get_prediction
@@ -144,7 +163,9 @@ async def test_prepare_prediction_main_refreshes_no_line_chunks_after_fallback(m
 
     monkeypatch.setattr(
         "pr_agent.tools.pr_code_suggestions.get_pr_multi_diffs",
-        lambda _git_provider, _token_handler, _model, max_calls, add_line_numbers: responses[add_line_numbers],
+        lambda _git_provider, _token_handler, _model, max_calls, add_line_numbers, **kwargs: (
+            responses[add_line_numbers], []
+        ),
     )
 
     await tool.prepare_prediction_main("fake-model")

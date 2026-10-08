@@ -1,7 +1,6 @@
 import copy
 import logging
 
-
 VALID_CONFIDENCE_VALUES = {"high", "medium", "low"}
 VALID_EVIDENCE_TYPES = {"diff", "ticket", "inferred"}
 FINDINGS_FILTER_MODE_OFF = "off"
