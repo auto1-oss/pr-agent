@@ -53,7 +53,7 @@ REPO_HOST_ONLY_KEYS_BY_SECTION = {
     "ollama": frozenset({"api_base"}),
     "openai": frozenset({"api_base", "api_type", "api_version"}),
     "openrouter": frozenset({"api_base"}),
-    "pr_reviewer": frozenset({"publish_error_details"}),
+    "pr_reviewer": frozenset({"publish_error_details", "blocker_prompt_path"}),
     # List the sibling repositories whose files and GitHub tickets a consuming repo
     # (or a comment command) may select into model context. A repo's .pr_agent.toml alone must
     # not be able to name an arbitrary same-owner private sibling: the actor check bounds who
@@ -128,7 +128,8 @@ CLI_HOST_ONLY_KEYS_BY_SECTION = {
     "ignore": frozenset({"regex"}),
     "pr_code_suggestions": frozenset({"parallel_calls"}),
     "pr_questions": frozenset({"resolve_threads"}),
-    "pr_reviewer": frozenset({"max_number_of_calls"}),
+    # A comment argument must not switch or steer blocker mode for one run; only the default-branch settings do.
+    "pr_reviewer": frozenset({"max_number_of_calls", "blocker_mode", "blocker_extra_instructions"}),
     "pr_similar_issue": frozenset({"force_update_dataset"}),
     "pr_update_changelog": frozenset({"push_changelog_changes"}),
 }
@@ -160,6 +161,7 @@ PER_DIRECTORY_HOST_ONLY_KEYS_BY_SECTION = {
         "inline_key_issues", "enable_review_labels_security",
         "enable_review_labels_effort", "require_estimate_effort_to_review",
         "require_security_review", "require_ticket_analysis_review", "max_previous_findings_chars",
+        "blocker_mode",
     }),
     "pr_description": frozenset({
         "publish_labels", "enable_large_pr_handling", "max_ai_calls", "async_ai_calls",

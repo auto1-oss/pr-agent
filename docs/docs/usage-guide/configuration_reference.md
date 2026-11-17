@@ -197,6 +197,9 @@ to-do list.
 | `enable_review_coverage_footer` | true |  |
 | `enable_large_pr_chunking` | false | large-diff chunking (opt-in). When the token budget leaves files out of the review, split the diff into chunks, review each chunk, and merge the per-chunk results into one review. |
 | `max_number_of_calls` | 3 | maximum number of chunk review calls, used only when enable_large_pr_chunking is true |
+| `blocker_mode` | false | opt-in per repository: /review publishes the blocker review and the GitHub App runs it on every push |
+| `blocker_prompt_path` | "" | host-only: TOML file with [pr_blocker_review_prompt] system and user templates |
+| `blocker_extra_instructions` | "" | extra instructions rendered into the blocker prompt |
 
 
 ## `[pr_description]` — /describe {#pr_description-describe}

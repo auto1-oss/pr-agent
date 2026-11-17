@@ -36,6 +36,7 @@ from pr_agent.servers.utils import (
     verify_signature,
 )
 from pr_agent.telemetry.prometheus import attach_metrics_endpoint, prometheus_metrics_enabled
+from pr_agent.tools.pr_blocker_reviewer import is_blocker_mode_enabled
 
 setup_logger(fmt=LoggingFormat.JSON, level=get_settings().get("CONFIG.LOG_LEVEL", "DEBUG"))
 base_path = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -305,7 +306,8 @@ async def handle_push_trigger_for_new_commits(body: Dict[str, Any],
     # we need to apply the repo settings to get the correct settings for the PR.
     # This is quite expensive - a call to the git provider is made for each PR event.
     apply_repo_settings(api_url)
-    if not get_settings().github_app.handle_push_trigger:
+    blocker_mode = is_blocker_mode_enabled()
+    if not get_settings().github_app.handle_push_trigger and not blocker_mode:
         return {}
 
     # TODO: do we still want to get the list of commits to filter bot/merge commits?
@@ -326,7 +328,14 @@ async def handle_push_trigger_for_new_commits(body: Dict[str, Any],
             return {}
         if get_identity_provider().verify_eligibility("github", sender_id, api_url) is not Eligibility.NOT_ELIGIBLE:
             get_logger().info(f"Performing incremental review for {api_url=} because of {event=} and {action=}")
-            return await _perform_auto_commands_github("push_commands", agent, body, api_url, log_context)
+            commands = None
+            if blocker_mode:
+                # Blocker mode reviews every head commit; other push commands run only where push runs are on.
+                github_app = get_settings().github_app
+                configured = (github_app.push_commands or []) if github_app.handle_push_trigger else []
+                commands = ["/review"] + [c for c in configured if not str(c).lstrip("/").startswith("review")]
+            return await _perform_auto_commands_github("push_commands", agent, body, api_url, log_context,
+                                                       commands=commands)
 
 
 def handle_closed_pr(body, event, action, log_context):
@@ -475,7 +484,7 @@ def _check_pull_request_event(action: str, body: dict, log_context: dict) -> Tup
 
 
 async def _perform_auto_commands_github(commands_conf: str, agent: PRAgent, body: dict, api_url: str,
-                                        log_context: dict):
+                                        log_context: dict, commands: list | None = None):
     feedback_on_draft = get_settings().github_app.feedback_on_draft_pr
     if commands_conf == "pr_commands" and body.get("action") == "ready_for_review" and feedback_on_draft:
         get_logger().info(f"Skipping draft-ready commands because draft feedback is enabled: {api_url}")
@@ -490,11 +499,12 @@ async def _perform_auto_commands_github(commands_conf: str, agent: PRAgent, body
         return
     if not should_process_pr_logic(body): # Here we already updated the configuration with the repo settings
         return {}
-    commands = (
-        get_pr_commands("github_app")
-        if commands_conf == "pr_commands"
-        else get_settings().get(f"github_app.{commands_conf}")
-    )
+    if commands is None:
+        commands = (
+            get_pr_commands("github_app")
+            if commands_conf == "pr_commands"
+            else get_settings().get(f"github_app.{commands_conf}")
+        )
     if not commands:
         get_logger().info(f"No {commands_conf} configured, skipping auto commands")
         return

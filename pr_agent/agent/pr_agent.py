@@ -32,6 +32,7 @@ from pr_agent.telemetry.meter import get_ai_calls_counter, get_commands_counter,
 from pr_agent.telemetry.shutdown import flush_telemetry
 from pr_agent.telemetry.tracer import get_tracer
 from pr_agent.tools.pr_add_docs import PRAddDocs
+from pr_agent.tools.pr_blocker_reviewer import PRBlockerReviewer, is_blocker_mode_enabled
 from pr_agent.tools.pr_code_suggestions import PRCodeSuggestions
 from pr_agent.tools.pr_config import PRConfig
 from pr_agent.tools.pr_description import PRDescription
@@ -443,7 +444,11 @@ class PRAgent:
         try:
             with get_logger().contextualize(command=action, pr_url=pr_url):
                 get_logger().info("PR-Agent request handler started", analytics=True)
-                if action == "answer":
+                if action in ("review", "review_pr", "auto_review") and is_blocker_mode_enabled():
+                    if notify:
+                        notify()
+                    await PRBlockerReviewer(pr_url, ai_handler=self.ai_handler, args=args).run()
+                elif action == "answer":
                     if notify:
                         notify()
                     await PRReviewer(pr_url, is_answer=True, args=args, ai_handler=self.ai_handler).run()

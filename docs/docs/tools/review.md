@@ -248,6 +248,72 @@ ticket-compliance labels or a "No ticket found" label. See
 [Fetching ticket context](../core-abilities/fetching_ticket_context.md) for linking and authentication details.
 
 
+### Blocker mode
+
+Blocker mode replaces the regular review for repositories that turn it on. It is off by default, and a repository
+without the key gets exactly the regular review.
+
+The host operator allows the key once (`config.repo_settings_allowed_keys = ["pr_reviewer.blocker_mode", ...]`) and
+points `pr_reviewer.blocker_prompt_path` at a TOML file with the prompt. A repository then turns the mode on in the
+`.pr_agent.toml` of its default branch:
+
+```toml
+[pr_reviewer]
+blocker_mode = true
+```
+
+A comment argument such as `/review --pr_reviewer.blocker_mode=false` is rejected, and a nested `.pr_agent.toml`
+cannot set the key, so a pull request cannot switch the mode off for itself.
+
+Where the mode is on:
+
+- `/review`, typed or automatic, runs the blocker review. `-i` is ignored: every run reviews the whole PR at its head.
+- The GitHub App also runs it on every push to the PR, even when `github_app.handle_push_trigger` is false. Other
+  `push_commands` still run only where push runs are on.
+- The review is one persistent comment, edited in place on every run. Each edit posts a short comment that links to it.
+- The comment has these sections: What it does (sentences with ids `C1`, `C2`, ...), Risk with a reason, Reversible with
+  how to undo, the ticket check, Blockers and Not blocking.
+- A blocker has an id (`B1`, `B2`, ...), one of the types `defect`, `criterion_missing`, `outside_ticket`,
+  `undeclared_dependency` or `unsafe_alone` and a concrete case. An item without a valid type or case is moved to Not
+  blocking. Blockers are never cut; Not blocking holds at most `num_max_findings` items.
+- Ids are read from the previous comment PR-Agent wrote. An id is kept for the same item and new items get a number
+  above every number used so far (tracked in a `<!-- pr-agent:blocker-ids C=n B=m -->` line), so links to an id stay
+  valid across pushes.
+- A blocker review that cannot be completed (answer cut off, no `blockers` key, unreadable YAML, missing prompt file)
+  posts a short failure comment and leaves the previous review untouched. Files the token budget left out of the diff
+  are named as the first Not blocking item.
+- The ticket is read fresh on every run, its key taken from the PR title or else the branch name. Comments people wrote
+  on the PR are given to the model as input.
+
+The comment ends with a hidden block for tools that read the review:
+
+```
+<!-- pr-agent-review
+mode: review-and-blockers
+pr: <repository>#<number>
+reviewed_sha: <full head commit SHA>
+ticket: <key or none>
+criteria: present | missing
+changes:
+  - id: C1
+    text: <short line>
+risk: low | mid | high
+risk_reason: <one line>
+reversible: yes | no
+undo: <only when reversible is no>
+blockers: []          # or a list of id, type, text and case
+-->
+```
+
+The prompt file has a `[pr_blocker_review_prompt]` table with `system` and `user` Jinja templates. They can use
+`title`, `branch`, `description`, `commit_messages_str`, `diff`, `related_tickets`, `ticket_note`, `people_comments`,
+`previous_changes`, `previous_blockers`, `num_max_findings`, `extra_instructions` and `date`. The model must answer
+in YAML with the keys `what_it_does` (list of `id`, `text`, `short`), `risk`, `risk_reason`, `reversible`, `undo`,
+`ticket` (`criteria`, `summary`), `blockers` (list of `id`, `type`, `text`, `case`) and `not_blocking` (list of
+strings). Unknown or missing values fall back to the strict side: risk `high`, reversible `no`, criteria `missing`.
+A missing `blockers` key fails the run instead of reading as "no blockers". `blocker_extra_instructions` cannot be set
+from a comment argument.
+
 ### Auto-blocking PRs from being merged based on the generated labels
 
 :::tip
