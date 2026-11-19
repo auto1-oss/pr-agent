@@ -447,7 +447,9 @@ class PRAgent:
                 if action in ("review", "review_pr", "auto_review") and is_blocker_mode_enabled():
                     if notify:
                         notify()
-                    await PRBlockerReviewer(pr_url, ai_handler=self.ai_handler, args=args).run()
+                    tool = PRBlockerReviewer(pr_url, ai_handler=self.ai_handler, args=args)
+                    # "/review evidence" checks only the proof, after a person wrote on the PR.
+                    await (tool.run_evidence() if args and args[0] == "evidence" else tool.run())
                 elif action == "answer":
                     if notify:
                         notify()

@@ -272,7 +272,7 @@ Where the mode is on:
   `push_commands` still run only where push runs are on.
 - The review is one persistent comment, edited in place on every run. Each edit posts a short comment that links to it.
 - The comment has these sections: What it does (sentences with ids `C1`, `C2`, ...), Risk with a reason, Reversible with
-  how to undo, the ticket check, Blockers and Not blocking.
+  how to undo, the ticket check, Proof, Blockers and Not blocking.
 - A blocker has an id (`B1`, `B2`, ...), one of the types `defect`, `criterion_missing`, `outside_ticket`,
   `undeclared_dependency` or `unsafe_alone` and a concrete case. An item without a valid type or case is moved to Not
   blocking. Blockers are never cut; Not blocking holds at most `num_max_findings` items.
@@ -284,6 +284,32 @@ Where the mode is on:
   are named as the first Not blocking item.
 - The ticket is read fresh on every run, its key taken from the PR title or else the branch name. Comments people wrote
   on the PR are given to the model as input.
+
+#### Proof per change
+
+The Proof section has one line per change: whether the PR shows that the change works and where. The status is one of
+`proven`, `failed`, `outdated` or `missing`:
+
+- `proven`: the PR description or a comment shows a result for this change, for example a test run or a QA check.
+- `failed`: a result for this change failed. The line links to it.
+- `outdated`: the result is older than a later commit that touched the same change.
+- `missing`: nothing in the PR shows a result for this change.
+
+The model sees the PR description, the comments people wrote (with their link, author, dates and file position) and
+the commits with their dates and files. It may cite only the description or one of the comments it was shown, by its
+link. Who wrote a source is taken from the PR, not from the model: `by` is the login and `by_author` says whether it is
+the PR author. A `proven` status that cites anything else becomes `missing` with the note `source not found`. A
+`failed` or `outdated` status may keep a link outside the PR, such as a CI run, with an empty `by`.
+
+Left out of the comments: bots, PR-Agent itself, bare commands, comments that carry `<!-- merge-gate` and the logins in
+`pr_reviewer.evidence_ignored_logins` (host-only). A comment longer than `pr_reviewer.evidence_comment_max_chars` keeps
+its start and its end. Comments an earlier review cited come first, then the newest.
+
+Where the mode is on, the GitHub App re-checks only the proof when a person comments, edits or deletes a comment,
+submits a review with text or edits the PR description. That run reads the existing review, asks the model only about
+proof and edits the Proof section and the hidden block in place. It changes nothing when the review is of an older head
+commit, when a push or a full review lands during the check or when the proof is unchanged. A failed check posts
+nothing. Bursts of comments collapse into one more run.
 
 The comment ends with a hidden block for tools that read the review:
 
@@ -297,6 +323,12 @@ criteria: present | missing
 changes:
   - id: C1
     text: <short line>
+    evidence:
+      status: proven | failed | outdated | missing
+      source: description | <comment link> | <link to a failed result> | ''
+      by: <login or ''>
+      by_author: yes | no | ''
+      note: <short reason or ''>
 risk: low | mid | high
 risk_reason: <one line>
 reversible: yes | no
@@ -306,13 +338,19 @@ blockers: []          # or a list of id, type, text and case
 ```
 
 The prompt file has a `[pr_blocker_review_prompt]` table with `system` and `user` Jinja templates. They can use
-`title`, `branch`, `description`, `commit_messages_str`, `diff`, `related_tickets`, `ticket_note`, `people_comments`,
-`previous_changes`, `previous_blockers`, `num_max_findings`, `extra_instructions` and `date`. The model must answer
-in YAML with the keys `what_it_does` (list of `id`, `text`, `short`), `risk`, `risk_reason`, `reversible`, `undo`,
+`title`, `branch`, `description`, `commit_messages_str`, `commits`, `diff`, `related_tickets`, `ticket_note`,
+`people_comments`, `previous_changes` (each with its `evidence`), `previous_blockers`, `num_max_findings`,
+`extra_instructions` and `date`. The model must answer in YAML with the keys `what_it_does` (list of `id`, `text`,
+`short` and `evidence` with `status`, `source` and `note`), `risk`, `risk_reason`, `reversible`, `undo`,
 `ticket` (`criteria`, `summary`), `blockers` (list of `id`, `type`, `text`, `case`) and `not_blocking` (list of
 strings). Unknown or missing values fall back to the strict side: risk `high`, reversible `no`, criteria `missing`.
 A missing `blockers` key fails the run instead of reading as "no blockers". `blocker_extra_instructions` cannot be set
 from a comment argument.
+
+The same file has a `[pr_evidence_review_prompt]` table for the proof-only run. Its templates can use `title`, `branch`,
+`description`, `people_comments`, `commits`, `changes` (list of `id`, `text` and the current `evidence`),
+`extra_instructions` and `date`. The model must answer with an `evidence` list of `id`, `status`, `source` and `note`.
+A change the answer leaves out becomes `missing`.
 
 ### Auto-blocking PRs from being merged based on the generated labels
 

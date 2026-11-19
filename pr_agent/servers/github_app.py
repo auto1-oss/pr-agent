@@ -36,7 +36,7 @@ from pr_agent.servers.utils import (
     verify_signature,
 )
 from pr_agent.telemetry.prometheus import attach_metrics_endpoint, prometheus_metrics_enabled
-from pr_agent.tools.pr_blocker_reviewer import is_blocker_mode_enabled
+from pr_agent.tools.pr_blocker_reviewer import is_blocker_mode_enabled, is_people_comment
 
 setup_logger(fmt=LoggingFormat.JSON, level=get_settings().get("CONFIG.LOG_LEVEL", "DEBUG"))
 base_path = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -120,6 +120,39 @@ async def get_body(request):
     return body
 
 
+def _comment_pr_url(body: Dict[str, Any]) -> str:
+    issue, comment = body.get("issue") or {}, body.get("comment") or {}
+    return str((issue.get("pull_request") or {}).get("url") or comment.get("pull_request_url") or "")
+
+
+async def handle_evidence_trigger(body: Dict[str, Any], api_url: str, text: str, agent: PRAgent,
+                                  log_context: Dict[str, Any], settings_applied: bool = False):
+    """Ask the blocker review to match proof again after a person wrote on the PR.
+
+    Only the proof is checked, so a comment never re-runs the full review. Events that arrive
+    while a check runs collapse into one more run.
+    """
+    sender = body.get("sender") or {}
+    login, user_type = str(sender.get("login") or ""), str(sender.get("type") or "")
+    if not api_url or user_type == "Bot" or login.lower().endswith("[bot]"):
+        return {}
+    if not settings_applied:
+        apply_repo_settings(api_url)
+    if not is_blocker_mode_enabled() or not is_people_comment(login, user_type, text):
+        return {}
+    log_context["api_url"] = api_url
+    with get_logger().contextualize(**log_context):
+        if get_identity_provider().verify_eligibility("github", sender.get("id"), api_url) is Eligibility.NOT_ELIGIBLE:
+            get_logger().info(f"User {login=} is not eligible to trigger the proof check on {api_url=}")
+            return {}
+        async with push_trigger_slot(f"evidence:{api_url}", allow_backlog=True,
+                                     ttl=get_settings().github_app.push_trigger_pending_tasks_ttl) as proceed:
+            if not proceed:
+                return {}
+            get_logger().info(f"Checking the proof of {api_url=} again after a comment by {login=}")
+            return await agent.handle_request(api_url, "/review evidence")
+
+
 async def handle_comments_on_pr(body: Dict[str, Any],
                                 event: str,
                                 sender: str,
@@ -137,7 +170,7 @@ async def handle_comments_on_pr(body: Dict[str, Any],
             get_logger().info(f"Reformatting comment_body so command is at the beginning: {comment_body}")
         else:
             get_logger().info("Ignoring comment not starting with /")
-            return {}
+            return await handle_evidence_trigger(body, _comment_pr_url(body), comment_body, agent, log_context)
     disable_eyes = False
     if "issue" in body and "pull_request" in body["issue"] and "url" in body["issue"]["pull_request"]:
         api_url = body["issue"]["pull_request"]["url"]
@@ -194,6 +227,8 @@ async def handle_new_pr_opened(body: Dict[str, Any],
             return await _perform_auto_commands_github("pr_commands", agent, body, api_url, log_context)
         else:
             get_logger().info(f"User {sender=} is not eligible to process PR {api_url=}")
+    elif action == "edited" and "body" in (body.get("changes") or {}):
+        return await handle_evidence_trigger(body, api_url, pull_request.get("body") or "", agent, log_context)
 
 
 # The check run each automatic command publishes its output to when `github.publish_as_check_run`
@@ -263,6 +298,8 @@ async def handle_pull_request_review_submitted(body: Dict[str, Any],
     apply_repo_settings(api_url)
     review = body.get("review", {})
     review_state = review.get("state", "") if isinstance(review, dict) else ""
+    if isinstance(review, dict) and str(review.get("body") or "").strip():
+        await handle_evidence_trigger(body, api_url, review["body"], agent, log_context, settings_applied=True)
     review_author_type = ""
     if isinstance(review, dict):
         review_author = review.get("user", {})
@@ -420,8 +457,10 @@ async def _dispatch_request(body: Dict[str, Any], event: str, action: str):
     elif event == 'pull_request' and action != 'synchronize' and action != 'closed':
         get_logger().debug('Request body', artifact=body, event=event)
         return await handle_new_pr_opened(body, event, sender, sender_id, action, log_context, agent)
-    elif event == "issue_comment" and 'edited' in action:
-        pass # handle_checkbox_clicked
+    elif event in ("issue_comment", "pull_request_review_comment") and action in ("edited", "deleted"):
+        # A changed or removed comment can change the proof; the comment body is the old or new text.
+        comment_body = (body.get("comment") or {}).get("body") or ""
+        return await handle_evidence_trigger(body, _comment_pr_url(body), comment_body, agent, log_context)
     # handle pull_request event with synchronize action - "push trigger" for new commits
     elif event == 'pull_request' and action == 'synchronize':
         return await handle_push_trigger_for_new_commits(body, event, sender,sender_id,  action, log_context, agent)
