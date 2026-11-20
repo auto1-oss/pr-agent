@@ -354,6 +354,60 @@ class TestBlockerReviewerRun:
         assert "1. Not reviewed, the diff did not fit: big.sql" in provider.comments[-1]["body"]
 
 
+class DiffProvider(FakeProvider):
+    """FakeProvider with a real small diff, so the real get_pr_diff and token budget run."""
+
+    def get_diff_files(self):
+        from pr_agent.algo.types import EDIT_TYPE, FilePatchInfo
+        patch = "@@ -1,2 +1,3 @@\n-old line\n+new line\n+another line\n context\n"
+        return [FilePatchInfo("old line\n context\n", "new line\nanother line\n context\n", patch,
+                              "src/Service.java", edit_type=EDIT_TYPE.MODIFIED)]
+
+    def get_languages(self):
+        return {"Java": 100}
+
+    def get_filtered_diff_file_names(self):
+        return []
+
+
+class FakeAiHandler:
+    def __init__(self, answer):
+        self.answer = answer
+        self.calls = []
+
+    async def chat_completion(self, model, system, user, temperature=0.2, img_path=None):
+        self.calls.append(user)
+        return self.answer, "stop"
+
+
+def test_small_diff_runs_the_real_diff_path(monkeypatch, settings_guard, tmp_path):
+    # A diff under the token limit comes back from get_pr_diff as a plain string, not a
+    # (diff, remaining files) tuple. This ran into "too many values to unpack" on QA (PR 58).
+    prompt_path = tmp_path / "blocker_prompt.toml"
+    prompt_path.write_text(PROMPT)
+    settings_guard.set("pr_reviewer.blocker_prompt_path", str(prompt_path))
+    settings_guard.set("config.publish_output", True)
+    provider = DiffProvider()
+    handler = FakeAiHandler(MODEL_OUTPUT)
+
+    async def call_once(f, **_kwargs):
+        await f(get_settings().config.model)
+
+    async def no_tickets(_provider):
+        return []
+
+    monkeypatch.setattr(blocker_module, "get_git_provider_with_context", lambda _url: provider)
+    monkeypatch.setattr(blocker_module, "retry_with_fallback_models", call_once)
+    monkeypatch.setattr(blocker_module, "extract_tickets", no_tickets)
+    tool = blocker_module.PRBlockerReviewer("https://example.com/o/r/pull/61", ai_handler=lambda: handler)
+    asyncio.run(tool.run())
+
+    assert len(handler.calls) == 1 and "src/Service.java" in handler.calls[0]
+    assert tool.not_reviewed == []
+    assert provider.comments[-1]["body"] != "Failed to run the blocker review on this PR"
+    assert PRBlockerReviewIdentity.PERSISTENT.value in provider.comments[-1]["body"]
+
+
 def test_prompt_is_read_from_the_configured_file(settings_guard, tmp_path):
     settings_guard.set("pr_reviewer.blocker_prompt_path", "")
     with pytest.raises(OSError):

@@ -130,9 +130,11 @@ class PRBlockerReviewer:
             model, self.git_provider.pr, variables, self.system_prompt, self.user_prompt,
             ai_handler=self.ai_handler, output_token_reserve=output_reserve)
         budget.require_input_capacity(OUTPUT_BUFFER_TOKENS_SOFT_THRESHOLD, preserve_minimum=True)
-        diff, self.not_reviewed = get_pr_diff(self.git_provider, budget.token_handler, model,
-                                              add_line_numbers_to_hunks=True, return_remaining_files=True,
-                                              output_token_reserve=output_reserve)
+        output = get_pr_diff(self.git_provider, budget.token_handler, model,
+                             add_line_numbers_to_hunks=True, return_remaining_files=True,
+                             output_token_reserve=output_reserve)
+        # get_pr_diff returns only the diff string when the full diff fits, a (diff, remaining) tuple otherwise.
+        diff, self.not_reviewed = output if isinstance(output, tuple) else (output, [])
         if not diff:
             raise FallbackEligibleError(f"No PR diff fits the blocker review for {model}")
         fitted = budget.fit_prompt_variable(variables, "diff", diff, ai_handler=self.ai_handler,
