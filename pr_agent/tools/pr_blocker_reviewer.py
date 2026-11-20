@@ -96,11 +96,18 @@ def ignored_logins() -> set[str]:
     return {str(login).strip().lower() for login in logins if str(login).strip()}
 
 
+def is_person(login: str, user_type: str) -> bool:
+    """A login of a person: not a bot and not an ignored login."""
+    login = (login or "").lower()
+    return (bool(login) and (user_type or "").lower() != "bot" and not login.endswith("[bot]")
+            and login not in ignored_logins())
+
+
 def is_people_comment(login: str, user_type: str, body: str) -> bool:
     """A comment a person wrote about the PR: not a bot, not a command, not a merge gate report."""
-    body, login = (body or "").strip(), (login or "").lower()
-    return (bool(body) and not body.startswith("/") and (user_type or "").lower() != "bot"
-            and not login.endswith("[bot]") and login not in ignored_logins() and MERGE_GATE_MARKER not in body)
+    body = (body or "").strip()
+    return (bool(body) and not body.startswith("/") and is_person(login, user_type)
+            and MERGE_GATE_MARKER not in body)
 
 
 def _cited(review: dict) -> set[str]:
@@ -118,6 +125,7 @@ class PRBlockerReviewer:
             "title": self.git_provider.pr.title,
             "branch": self.git_provider.get_pr_branch(),
             "description": "",
+            "description_date": "",
             "commit_messages_str": "",
             "people_comments": "",
             "commits": "",
@@ -204,6 +212,26 @@ class PRBlockerReviewer:
             if url:
                 sources[source_key(url)] = {"source": url, "by": login, "by_author": by_author}
         return "\n".join(parts), sources
+
+    def _description_date(self) -> str:
+        """When a person last wrote the description, so the model can tell proof in it that is older than a change.
+
+        Bot and PR-Agent edits do not count, so a tool that rewrites the description does not make old proof
+        look new. Without a person's edit the description is as old as the PR. Empty when the provider has
+        no edit history.
+        """
+        edits = self.git_provider.get_description_edits()
+        if edits is None:
+            return ""
+        for edit in edits:
+            login = edit.get("login") or ""
+            if not is_person(login, edit.get("type") or ""):
+                continue
+            with contextlib.suppress(Exception):  # a login that cannot be verified counts as a person
+                if self.git_provider.is_comment_authored_by_pr_agent({"user": {"login": login}}) is True:
+                    continue
+            return _utc(edit.get("edited_at"))
+        return _utc(_field(getattr(self.git_provider, "pr", None), "created_at"))
 
     def _commits(self) -> str:
         """The newest commits with date and files, so the model can tell proof that is older than a change."""
@@ -300,7 +328,9 @@ class PRBlockerReviewer:
             self.previous = self._find_previous_review()
             description = self.git_provider.get_user_description() or ""
             people_comments, self.sources = self._people_comments(description, _cited(self.previous))
-            self.vars.update(description=description, commit_messages_str=self.git_provider.get_commit_messages(),
+            self.vars.update(description=description,
+                             description_date=self._description_date() if description.strip() else "",
+                             commit_messages_str=self.git_provider.get_commit_messages(),
                              people_comments=people_comments, commits=self._commits(),
                              previous_changes=self.previous.get("changes", []),
                              previous_blockers=self.previous.get("blockers", []))
@@ -354,6 +384,7 @@ class PRBlockerReviewer:
             people_comments, self.sources = self._people_comments(description, _cited(review))
             variables = {
                 "title": self.vars["title"], "branch": self.vars["branch"], "description": description,
+                "description_date": self._description_date() if description.strip() else "",
                 "people_comments": people_comments, "commits": self._commits(), "date": self.vars["date"],
                 "changes": [{"id": c["id"], "text": c["text"], "evidence": c["evidence"]} for c in review["changes"]],
                 "extra_instructions": self.vars["extra_instructions"],

@@ -32,6 +32,7 @@ from pr_agent.algo.comment_identity import (
 from pr_agent.config_loader import get_settings
 from pr_agent.config_security import PER_DIRECTORY_HOST_ONLY_KEYS_BY_SECTION, is_repo_host_only_key
 from pr_agent.git_providers.git_provider import GitProvider
+from pr_agent.git_providers.github_provider import GithubProvider
 
 from ._settings_helpers import restore_settings, snapshot_settings
 
@@ -42,7 +43,7 @@ PROMPT = textwrap.dedent('''
     user = "{{ diff }} {{ people_comments }} {{ previous_changes }} {{ related_tickets }} {{ num_max_findings }}"
 
     [pr_evidence_review_prompt]
-    system = "Match proof for {{ title }} on {{ branch }} at {{ date }} {{ extra_instructions }}"
+    system = "Match proof for {{ title }} at {{ date }} {{ extra_instructions }} [{{ description_date }}]"
     user = """{{ description }}|{{ people_comments }}|{{ commits }}|\
     {% for c in changes %}{{ c.id }}={{ c.evidence.status }} {% endfor %}"""
 ''')
@@ -234,6 +235,7 @@ class FakeProvider:
         self.comments = list(comments)
         self.calls = []
         self.pr_commits = []
+        self.description_edits = None
 
     def __getattr__(self, name):
         # Record anything else the tool touches, so a test can prove nothing approves the PR.
@@ -267,6 +269,9 @@ class FakeProvider:
 
     def get_user_description(self):
         return "Depends on: none"
+
+    def get_description_edits(self):
+        return self.description_edits
 
     def get_commit_messages(self):
         return "ABC-123 Handle large messages"
@@ -388,10 +393,11 @@ class DiffProvider(FakeProvider):
 class FakeAiHandler:
     def __init__(self, answer):
         self.answer = answer
-        self.calls = []
+        self.calls, self.systems = [], []
 
     async def chat_completion(self, model, system, user, temperature=0.2, img_path=None):
         self.calls.append(user)
+        self.systems.append(system)
         return self.answer, "stop"
 
 
@@ -878,6 +884,92 @@ class TestRunEvidence:
         settings_guard.set("config.propagate_tool_errors", True)
         with pytest.raises(ValueError):
             _run_evidence(monkeypatch, provider, "evidence: nope")
+
+
+def _edit(login, edited_at, user_type="User"):
+    return {"login": login, "type": user_type, "edited_at": edited_at}
+
+
+CREATED = datetime.datetime(2026, 11, 18, 9, 0, tzinfo=datetime.timezone(datetime.timedelta(hours=1)))
+
+
+class TestDescriptionDate:
+    def _tool(self, edits):
+        tool = _people_tool()
+        tool.git_provider.pr.created_at = CREATED
+        tool.git_provider.description_edits = edits
+        return tool
+
+    def test_the_newest_edit_of_a_person_dates_the_description(self, settings_guard):
+        settings_guard.set("pr_reviewer.evidence_ignored_logins", ["jenkins-user"])
+        tool = self._tool([_edit("pr-agent-app", "2026-11-20T09:00:00Z", "Bot"),
+                           _edit("renovate[bot]", "2026-11-20T08:00:00Z"),
+                           _edit("Jenkins-User", "2026-11-20T07:00:00Z"),
+                           _edit("pr-agent[bot]", "2026-11-20T06:00:00Z"),
+                           _edit("", "2026-11-20T05:00:00Z", ""),
+                           _edit("alice", "2026-11-19T10:00:00Z"),
+                           _edit("alice", "2026-11-18T08:00:00Z")])
+        assert tool._description_date() == "2026-11-19T10:00:00Z"
+
+    def test_edits_of_the_pr_agent_user_do_not_count(self, settings_guard):
+        tool = self._tool([_edit("agent-user", "2026-11-20T09:00:00Z"), _edit("bob", "2026-11-19T11:00:00Z")])
+        tool.git_provider.is_comment_authored_by_pr_agent = lambda c: c["user"]["login"] == "agent-user"
+        assert tool._description_date() == "2026-11-19T11:00:00Z"
+
+    def test_a_login_that_cannot_be_verified_counts_as_a_person(self, settings_guard):
+        tool = self._tool([_edit("bob", "2026-11-19T11:00:00Z")])
+
+        def cannot_verify(_comment):
+            raise RuntimeError("GitHub identity cannot be verified")
+
+        tool.git_provider.is_comment_authored_by_pr_agent = cannot_verify
+        assert tool._description_date() == "2026-11-19T11:00:00Z"
+
+    @pytest.mark.parametrize("edits", [[], [_edit("pr-agent-app", "2026-11-20T09:00:00Z", "Bot")]])
+    def test_without_an_edit_of_a_person_the_description_is_as_old_as_the_pr(self, settings_guard, edits):
+        assert self._tool(edits)._description_date() == "2026-11-18T08:00:00Z"
+
+    def test_no_date_when_the_provider_has_no_edit_history(self, settings_guard):
+        assert self._tool(None)._description_date() == ""
+
+    def test_the_review_gets_the_date(self, monkeypatch, settings_guard, tmp_path):
+        provider = FakeProvider()
+        provider.description_edits = [_edit("alice", "2026-11-19T10:00:00Z")]
+        seen = _run_tool(monkeypatch, settings_guard, tmp_path, provider)
+        assert seen["vars"]["description_date"] == "2026-11-19T10:00:00Z"
+
+    def test_an_empty_description_has_no_date(self, monkeypatch, settings_guard, tmp_path):
+        provider = FakeProvider()
+        provider.get_user_description = lambda: "  "
+        provider.description_edits = [_edit("alice", "2026-11-19T10:00:00Z")]
+        seen = _run_tool(monkeypatch, settings_guard, tmp_path, provider)
+        assert seen["vars"]["description_date"] == ""
+
+    def test_the_proof_check_gets_the_date(self, monkeypatch, settings_guard, tmp_path):
+        provider = _reviewed(monkeypatch, settings_guard, tmp_path)
+        provider.description_edits = [_edit("alice", "2026-11-19T10:00:00Z")]
+        handler = _run_evidence(monkeypatch, provider)
+        assert handler.systems[0].endswith("[2026-11-19T10:00:00Z]")
+
+    def test_github_reads_the_edit_history(self):
+        seen = {}
+        nodes = [{"editedAt": "2026-11-20T09:00:00Z", "editor": {"login": "pr-agent-app", "__typename": "Bot"}},
+                 {"editedAt": "2026-11-19T10:00:00Z", "editor": {"login": "alice", "__typename": "User"}},
+                 {"editedAt": "2026-11-18T08:00:00Z", "editor": None}]
+
+        def graphql_query(query, variables):
+            seen.update(query=query, variables=variables)
+            return {}, {"data": {"repository": {"pullRequest": {"userContentEdits": {"nodes": nodes}}}}}
+
+        provider = GithubProvider.__new__(GithubProvider)
+        provider.repo, provider.pr_num = "o/r", "61"
+        provider.github_client = SimpleNamespace(_Github__requester=SimpleNamespace(graphql_query=graphql_query))
+        assert provider.get_description_edits() == [
+            {"login": "pr-agent-app", "type": "Bot", "edited_at": "2026-11-20T09:00:00Z"},
+            {"login": "alice", "type": "User", "edited_at": "2026-11-19T10:00:00Z"},
+            {"login": "", "type": "", "edited_at": "2026-11-18T08:00:00Z"}]
+        assert seen["variables"] == {"owner": "o", "name": "r", "number": 61}
+        assert "userContentEdits" in seen["query"] and "editedAt" in seen["query"]
 
 
 API = "https://api.github.com/repos/o/r/pulls/61"

@@ -295,11 +295,15 @@ The Proof section has one line per change: whether the PR shows that the change 
 - `outdated`: the result is older than a later commit that touched the same change.
 - `missing`: nothing in the PR shows a result for this change.
 
-The model sees the PR description, the comments people wrote (with their link, author, dates and file position) and
-the commits with their dates and files. It may cite only the description or one of the comments it was shown, by its
-link. Who wrote a source is taken from the PR, not from the model: `by` is the login and `by_author` says whether it is
-the PR author. A `proven` status that cites anything else becomes `missing` with the note `source not found`. A
-`failed` or `outdated` status may keep a link outside the PR, such as a CI run, with an empty `by`.
+The model sees the PR description with the time a person last wrote it, the comments people wrote (with their link,
+author, dates and file position) and the commits with their dates and files. The description time is the newest edit by
+a person in the GitHub edit history, or the creation of the PR when no person edited it. Edits by bots, PR-Agent and the
+ignored logins do not count, so a tool that rewrites the description does not make old proof in it look new. Any edit by
+a person dates the whole description. A provider without an edit history gives no time. It may cite only the description
+or one of the comments it was shown, by its link. Who wrote a source is taken from the PR, not from the model: `by` is
+the login and `by_author` says whether it is the PR author. A `proven` status that cites anything else becomes `missing`
+with the note `source not found`. A `failed` or `outdated` status may keep a link outside the PR, such as a CI run, with
+an empty `by`.
 
 Left out of the comments: bots, PR-Agent itself, bare commands, comments that carry `<!-- merge-gate` and the logins in
 `pr_reviewer.evidence_ignored_logins` (host-only). A comment longer than `pr_reviewer.evidence_comment_max_chars` keeps
@@ -337,20 +341,20 @@ blockers: []          # or a list of id, type, text and case
 -->
 ```
 
-The prompt file has a `[pr_blocker_review_prompt]` table with `system` and `user` Jinja templates. They can use
-`title`, `branch`, `description`, `commit_messages_str`, `commits`, `diff`, `related_tickets`, `ticket_note`,
+The prompt file has a `[pr_blocker_review_prompt]` table with `system` and `user` Jinja templates. They can use `title`,
+`branch`, `description`, `description_date`, `commit_messages_str`, `commits`, `diff`, `related_tickets`, `ticket_note`,
 `people_comments`, `previous_changes` (each with its `evidence`), `previous_blockers`, `num_max_findings`,
 `extra_instructions` and `date`. The model must answer in YAML with the keys `what_it_does` (list of `id`, `text`,
-`short` and `evidence` with `status`, `source` and `note`), `risk`, `risk_reason`, `reversible`, `undo`,
-`ticket` (`criteria`, `summary`), `blockers` (list of `id`, `type`, `text`, `case`) and `not_blocking` (list of
-strings). Unknown or missing values fall back to the strict side: risk `high`, reversible `no`, criteria `missing`.
-A missing `blockers` key fails the run instead of reading as "no blockers". `blocker_extra_instructions` cannot be set
-from a comment argument.
+`short` and `evidence` with `status`, `source` and `note`), `risk`, `risk_reason`, `reversible`, `undo`, `ticket`
+(`criteria`, `summary`), `blockers` (list of `id`, `type`, `text`, `case`) and `not_blocking` (list of strings). Unknown
+or missing values fall back to the strict side: risk `high`, reversible `no`, criteria `missing`. A missing `blockers`
+key fails the run instead of reading as "no blockers". `blocker_extra_instructions` cannot be set from a comment
+argument.
 
 The same file has a `[pr_evidence_review_prompt]` table for the proof-only run. Its templates can use `title`, `branch`,
-`description`, `people_comments`, `commits`, `changes` (list of `id`, `text` and the current `evidence`),
-`extra_instructions` and `date`. The model must answer with an `evidence` list of `id`, `status`, `source` and `note`.
-A change the answer leaves out becomes `missing`.
+`description`, `description_date`, `people_comments`, `commits`, `changes` (list of `id`, `text` and the current
+`evidence`), `extra_instructions` and `date`. The model must answer with an `evidence` list of `id`, `status`, `source`
+and `note`. A change the answer leaves out becomes `missing`.
 
 ### Auto-blocking PRs from being merged based on the generated labels
 
