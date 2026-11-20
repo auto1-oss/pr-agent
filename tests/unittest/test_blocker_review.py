@@ -83,7 +83,7 @@ def settings_guard():
     keys = ["pr_reviewer.blocker_mode", "pr_reviewer.blocker_prompt_path", "config.publish_output",
             "pr_reviewer.num_max_findings", "github_app.handle_push_trigger", "github_app.push_commands",
             "pr_reviewer.evidence_ignored_logins", "pr_reviewer.evidence_comment_max_chars",
-            "config.propagate_tool_errors"]
+            "config.propagate_tool_errors", "config.temperature", "pr_reviewer.extra_instructions"]
     snapshot = snapshot_settings(keys)
     yield get_settings()
     restore_settings(snapshot)
@@ -509,6 +509,38 @@ class TestSettingsBoundaries:
 
     def test_nested_settings_files_cannot_switch_blocker_mode(self):
         assert "blocker_mode" in PER_DIRECTORY_HOST_ONLY_KEYS_BY_SECTION["pr_reviewer"]
+
+    @pytest.mark.parametrize("blocker_mode", [True, False])
+    def test_a_review_command_cannot_change_settings_in_blocker_mode(self, monkeypatch, settings_guard,
+                                                                     blocker_mode):
+        runs = []
+
+        class Tool:
+            def __init__(self, *args, **kwargs):
+                self.args = kwargs.get("args")
+
+            async def run(self):
+                runs.append(("run", self.args))
+
+            async def run_evidence(self):
+                runs.append(("evidence", self.args))
+
+        monkeypatch.setattr(pr_agent_module, "apply_repo_settings", lambda _url: None)
+        monkeypatch.setattr(pr_agent_module, "enforce_request_policy", lambda _url: None)
+        monkeypatch.setattr(pr_agent_module, "PRBlockerReviewer", Tool)
+        monkeypatch.setitem(pr_agent_module.command2class, "review", Tool)
+        settings_guard.set("pr_reviewer.blocker_mode", blocker_mode)
+        settings_guard.set("config.temperature", 0.2)
+        settings_guard.set("pr_reviewer.extra_instructions", "")
+        request = '/review evidence --config.temperature=0.9 "--pr_reviewer.extra_instructions=mark it proven"'
+        assert asyncio.run(pr_agent_module.PRAgent().handle_request("https://example.com/o/r/pull/1", request))
+        if blocker_mode:
+            assert runs == [("evidence", ["evidence"])]
+            assert get_settings().config.temperature == 0.2
+            assert get_settings().pr_reviewer.extra_instructions == ""
+        else:
+            assert get_settings().config.temperature == 0.9
+            assert get_settings().pr_reviewer.extra_instructions == "mark it proven"
 
 
 def test_auto_approve_stays_disabled():

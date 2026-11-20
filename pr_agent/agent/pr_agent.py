@@ -234,6 +234,9 @@ def parse_command(command: str) -> list[str]:
     return [action] + args
 
 
+BLOCKER_REVIEW_ACTIONS = ("review", "review_pr", "auto_review")
+
+
 def _validation_args(args: list[str]) -> list[str]:
     """Project setting arguments to their keys for command-line validation.
 
@@ -380,6 +383,18 @@ class PRAgent:
             span.set_attribute("error.argument", arg)
             return False
 
+        # Blocker mode takes its settings from configuration files only. A "--section.key=value"
+        # argument on a review command, from a comment or an auto command, could otherwise change
+        # the model or add text to the prompt and steer a review that a merge gate trusts.
+        if action.lstrip("/").lower() in BLOCKER_REVIEW_ACTIONS and is_blocker_mode_enabled():
+            dropped = [argument for argument in args if argument.strip().startswith("--")]
+            if dropped:
+                get_logger().error(
+                    "Dropping setting argument(s) of a review in blocker mode: "
+                    + ", ".join(f"'{argument.split('=', 1)[0]}'" for argument in dropped))
+                span.set_attribute("pr_agent.args_dropped", len(dropped))
+                args = [argument for argument in args if not argument.strip().startswith("--")]
+
         # Update settings from args
         args = update_settings_from_args(args)
 
@@ -444,7 +459,7 @@ class PRAgent:
         try:
             with get_logger().contextualize(command=action, pr_url=pr_url):
                 get_logger().info("PR-Agent request handler started", analytics=True)
-                if action in ("review", "review_pr", "auto_review") and is_blocker_mode_enabled():
+                if action in BLOCKER_REVIEW_ACTIONS and is_blocker_mode_enabled():
                     if notify:
                         notify()
                     tool = PRBlockerReviewer(pr_url, ai_handler=self.ai_handler, args=args)
