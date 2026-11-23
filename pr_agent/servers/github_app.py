@@ -150,8 +150,11 @@ async def handle_evidence_trigger(body: Dict[str, Any], api_url: str, text: str,
     login, user_type = str(sender.get("login") or ""), str(sender.get("type") or "")
     if not api_url or user_type == "Bot" or login.lower().endswith("[bot]"):
         return {}
+    if not str(get_settings().pr_reviewer.get("blocker_prompt_path", "") or "").strip():
+        return {}  # the path is host-only, so a host without it never reads repo settings for comments
     if not settings_applied:
-        apply_repo_settings(api_url)
+        # A repository with the mode off sees nothing from a comment, not even a settings error.
+        apply_repo_settings(api_url, report_errors=False)
     by_person = is_person(login, user_type) if is_description else is_people_comment(login, user_type, text)
     if not is_blocker_mode_enabled() or not by_person:
         return {}
@@ -373,14 +376,16 @@ async def handle_push_trigger_for_new_commits(body: Dict[str, Any],
     if get_settings().github_app.push_trigger_ignore_merge_commits and after_sha == merge_commit_sha:
         return {}
 
+    # Blocker mode reviews every head commit, so a push during a review always queues one more run.
     async with push_trigger_slot(
         api_url,
-        allow_backlog=get_settings().github_app.push_trigger_pending_tasks_backlog,
+        allow_backlog=blocker_mode or get_settings().github_app.push_trigger_pending_tasks_backlog,
         ttl=get_settings().github_app.push_trigger_pending_tasks_ttl,
     ) as proceed:
         if not proceed:
             return {}
-        _forget_cached_pr()
+        if blocker_mode:
+            _forget_cached_pr()
         if get_identity_provider().verify_eligibility("github", sender_id, api_url) is not Eligibility.NOT_ELIGIBLE:
             get_logger().info(f"Performing incremental review for {api_url=} because of {event=} and {action=}")
             commands = None

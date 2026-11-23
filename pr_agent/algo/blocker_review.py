@@ -103,7 +103,8 @@ def normalize_review(data: dict, previous: dict, max_not_blocking: int, sources:
                 not_blocking.append(_text(item))
             continue
         if not _text(item.get("text")):
-            continue
+            # A finding under another key (description, message) would otherwise vanish from the review.
+            raise ValueError("Blocker review output has a blocker without text")
         blocker = {"id": item.get("id"), "type": _text(item.get("type")).lower(), "text": _text(item.get("text")),
                    "case": _text(item.get("case"))}
         if blocker["type"] in BLOCKER_TYPES and blocker["case"]:

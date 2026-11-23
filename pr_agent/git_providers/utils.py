@@ -239,7 +239,7 @@ def _apply_settings_from_file(path: str, label: str):
         get_logger().warning(f"Failed to apply {label} settings from {path}: {e}")
 
 
-def apply_repo_settings(pr_url):
+def apply_repo_settings(pr_url, report_errors: bool = True):
     os.environ["AUTO_CAST_FOR_DYNACONF"] = "false"
     _restore_per_directory_settings()
 
@@ -314,7 +314,7 @@ def apply_repo_settings(pr_url):
                     get_logger().warning(f"Failed to apply per-directory settings {category}, error: {str(e)}")
                     config_errors.append({'error': str(e), 'settings': settings_content, 'category': category})
 
-            if config_errors:
+            if config_errors and report_errors:
                 handle_configurations_errors(config_errors, git_provider)
         except Exception as e:
             get_logger().exception("Failed to apply repo settings", e)

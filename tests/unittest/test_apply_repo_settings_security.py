@@ -290,6 +290,17 @@ def test_invalid_toml_publishes_one_local_error(monkeypatch, settings_snapshot):
     assert captured["errors"][0]["settings"] == malformed
 
 
+def test_invalid_toml_is_not_published_when_errors_are_not_reported(monkeypatch, settings_snapshot):
+    provider = FakeGitProvider(repo_settings_bytes=b"[pr_reviewer\nnum_max_findings = 7\n")
+    captured = _install_provider(monkeypatch, provider)
+    get_settings().set("config.use_repo_settings_file", True)
+
+    apply_repo_settings("https://example.com/owner/repo/pull/1", report_errors=False)
+
+    assert provider.get_repo_settings_calls == 1
+    assert captured["errors"] is None
+
+
 def test_forbidden_directive_does_not_pollute_settings(monkeypatch, settings_snapshot):
     """
     A repo TOML containing forbidden directives (e.g. dynaconf_include) must

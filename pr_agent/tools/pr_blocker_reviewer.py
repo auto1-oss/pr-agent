@@ -41,6 +41,16 @@ MAX_PEOPLE_COMMENTS_CHARS = 12000
 MAX_COMMITS = 20
 MAX_COMMIT_FILES = 30
 CUT_MARKER = "\n[... cut ...]\n"
+# A cut comment keeps at least this much, a smaller rest of the budget stays unused.
+MIN_CUT_CHARS = 200
+
+
+def _cut(body: str, limit: int) -> str:
+    """Keep the start and the end of a text longer than limit."""
+    if len(body) <= limit:
+        return body
+    keep = (limit - len(CUT_MARKER)) // 2
+    return body[:keep] + CUT_MARKER + body[-keep:]
 
 
 def is_blocker_mode_enabled() -> bool:
@@ -195,21 +205,26 @@ class PRBlockerReviewer:
         limit = max(200, int(get_settings().pr_reviewer.get("evidence_comment_max_chars", 6000) or 6000))
         parts, size = [], 0
         for updated, created, url, login, body, comment in entries:
-            if len(body) > limit:
-                keep = (limit - len(CUT_MARKER)) // 2
-                body = body[:keep] + CUT_MARKER + body[-keep:]
+            body = _cut(body.replace("</comment", "</ comment"), limit)
             path = _field(comment, "path")
             where = f' file="{_attribute(path)}:{_attribute(_field(comment, "line"))}"' if path else ""
             by_author = "yes" if login and login.lower() == pr_author.lower() else "no"
-            text = (f'<comment url="{url}" by="{_attribute(login) or "unknown"}" author="{by_author}" '
-                    f'created="{created}" updated="{updated}"{where}>\n'
-                    f'{body.replace("</comment", "</ comment")}\n</comment>')
-            if size + len(text) > MAX_PEOPLE_COMMENTS_CHARS:
-                continue  # a smaller, older comment may still fit
-            parts.append(text)
-            size += len(text)
+            start = (f'<comment url="{url}" by="{_attribute(login) or "unknown"}" author="{by_author}" '
+                     f'created="{created}" updated="{updated}"{where}>\n')
+            room = MAX_PEOPLE_COMMENTS_CHARS - size - len(start) - len("\n</comment>")
+            full = len(body) <= room
+            if not full:
+                # The first comment that does not fit is cut to the space left and ends the list, so an older
+                # comment can never take the place of a newer one.
+                if room < MIN_CUT_CHARS:
+                    break
+                body = _cut(body, room)
+            parts.append(f"{start}{body}\n</comment>")
+            size += len(parts[-1])
             if url:
                 sources[source_key(url)] = {"source": url, "by": login, "by_author": by_author}
+            if not full:
+                break
         return "\n".join(parts), sources
 
     def _description_date(self) -> str:
