@@ -125,6 +125,18 @@ def _comment_pr_url(body: Dict[str, Any]) -> str:
     return str((issue.get("pull_request") or {}).get("url") or comment.get("pull_request_url") or "")
 
 
+def _forget_cached_pr() -> None:
+    """Forget the PR this request read before it waited for its slot.
+
+    A run that waits behind another one starts after later pushes may have been dropped, so it has to read the PR
+    again to review the latest commit.
+    """
+    if context.exists():
+        context["git_provider"] = {}
+        for key in ("diff_files", "git_files"):
+            context.pop(key, None)
+
+
 async def handle_evidence_trigger(body: Dict[str, Any], api_url: str, text: str, agent: PRAgent,
                                   log_context: Dict[str, Any], settings_applied: bool = False,
                                   is_description: bool = False):
@@ -152,6 +164,7 @@ async def handle_evidence_trigger(body: Dict[str, Any], api_url: str, text: str,
                                      ttl=get_settings().github_app.push_trigger_pending_tasks_ttl) as proceed:
             if not proceed:
                 return {}
+            _forget_cached_pr()
             get_logger().info(f"Checking the proof of {api_url=} again after a comment by {login=}")
             return await agent.handle_request(api_url, "/review evidence")
 
@@ -367,6 +380,7 @@ async def handle_push_trigger_for_new_commits(body: Dict[str, Any],
     ) as proceed:
         if not proceed:
             return {}
+        _forget_cached_pr()
         if get_identity_provider().verify_eligibility("github", sender_id, api_url) is not Eligibility.NOT_ELIGIBLE:
             get_logger().info(f"Performing incremental review for {api_url=} because of {event=} and {action=}")
             commands = None

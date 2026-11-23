@@ -90,13 +90,19 @@ def normalize_review(data: dict, previous: dict, max_not_blocking: int, sources:
          "evidence": normalize_evidence(item.get("evidence"), sources)}
         for item in data.get("what_it_does") or [] if isinstance(item, dict) and _text(item.get("text"))
     ]
-    if not changes or "blockers" not in data:
-        # A cut-off answer must fail the run, never read as a review without blockers.
-        raise ValueError("Blocker review output has no What it does sentences or no blockers key")
+    if not changes or not isinstance(data.get("blockers"), list):
+        # A cut-off or malformed answer must fail the run, never read as a review without blockers. A mapping
+        # or an empty value in place of the list would otherwise drop every blocker in it.
+        raise ValueError("Blocker review output has no What it does sentences or no blockers list")
     ticket = data.get("ticket") if isinstance(data.get("ticket"), dict) else {}
     blockers, not_blocking = [], []
-    for item in data.get("blockers") or []:
-        if not isinstance(item, dict) or not _text(item.get("text")):
+    for item in data["blockers"]:
+        if not isinstance(item, dict):
+            # A blocker written as plain text has no type or case, so it is shown as not blocking.
+            if _text(item):
+                not_blocking.append(_text(item))
+            continue
+        if not _text(item.get("text")):
             continue
         blocker = {"id": item.get("id"), "type": _text(item.get("type")).lower(), "text": _text(item.get("text")),
                    "case": _text(item.get("case"))}

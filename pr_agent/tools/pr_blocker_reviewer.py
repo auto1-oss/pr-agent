@@ -114,11 +114,6 @@ def is_people_comment(login: str, user_type: str, body: str) -> bool:
             and not any(marker in body for marker in ignored_markers()))
 
 
-def _cited(review: dict) -> set[str]:
-    return {source_key(c["evidence"]["source"]) for c in review.get("changes", [])
-            if isinstance(c.get("evidence"), dict) and c["evidence"].get("source")}
-
-
 class PRBlockerReviewer:
     def __init__(self, pr_url: str, args: list = None, ai_handler: partial[BaseAiHandler,] = LiteLLMAIHandler):
         self.pr_url = pr_url
@@ -161,12 +156,13 @@ class PRBlockerReviewer:
         """Return the hidden block of the newest review comment this PR-Agent identity wrote."""
         return parse_hidden_block(self._find_previous_comment()[1])
 
-    def _people_comments(self, description: str, cited: set[str] = frozenset()) -> tuple[str, dict]:
+    def _people_comments(self, description: str) -> tuple[str, dict]:
         """Render what people wrote on the PR and return the sources the model may cite as proof.
 
-        Comments an earlier review cited come first, then the newest. Bots, PR-Agent, bare commands,
-        comments with an ignored marker and ignored logins are left out. Who wrote a source is taken from here, so
-        the model cannot claim a comment was written by someone else.
+        The newest comments come first and keep their place when the size limit is reached, so an older passing
+        report can never push out a newer failed one. Bots, PR-Agent, bare commands, comments with an ignored marker
+        and ignored logins are left out. Who wrote a source is taken from here, so the model cannot claim a comment
+        was written by someone else.
         """
         provider, pr = self.git_provider, getattr(self.git_provider, "pr", None)
         pr_author = _author(pr)[0] if pr is not None else ""
@@ -194,12 +190,11 @@ class PRBlockerReviewer:
                     continue
             url = _attribute(_field(comment, "html_url"))
             created = _utc(_field(comment, "created_at") or _field(comment, "submitted_at"))
-            entries.append((source_key(url) in cited, _utc(_field(comment, "updated_at")) or created, created, url,
-                            login, body, comment))
-        entries.sort(key=lambda entry: entry[:2], reverse=True)
+            entries.append((_utc(_field(comment, "updated_at")) or created, created, url, login, body, comment))
+        entries.sort(key=lambda entry: entry[0], reverse=True)
         limit = max(200, int(get_settings().pr_reviewer.get("evidence_comment_max_chars", 6000) or 6000))
         parts, size = [], 0
-        for _, updated, created, url, login, body, comment in entries:
+        for updated, created, url, login, body, comment in entries:
             if len(body) > limit:
                 keep = (limit - len(CUT_MARKER)) // 2
                 body = body[:keep] + CUT_MARKER + body[-keep:]
@@ -332,7 +327,7 @@ class PRBlockerReviewer:
             self.system_prompt, self.user_prompt = load_blocker_prompt()
             self.previous = self._find_previous_review()
             description = self.git_provider.get_user_description() or ""
-            people_comments, self.sources = self._people_comments(description, _cited(self.previous))
+            people_comments, self.sources = self._people_comments(description)
             self.vars.update(description=description,
                              description_date=self._description_date() if description.strip() else "",
                              commit_messages_str=self.git_provider.get_commit_messages(),
@@ -351,6 +346,13 @@ class PRBlockerReviewer:
                 review["not_blocking"].insert(0, f"Not reviewed, the diff did not fit: {', '.join(self.not_reviewed)}")
             body = render_comment(review, self._pr_ref(), self.head_sha, ticket)
             if get_settings().config.publish_output:
+                current = self._current_head()
+                if current and current != self.head_sha:
+                    # The diff and the head are read separately, so this review may mix two commits. The push
+                    # that moved the head queues a run that reviews the latest commit.
+                    get_logger().info(f"The head of {self.pr_url} moved to {current[:7]} during the review of "
+                                      f"{self.head_sha[:7]}, not publishing it")
+                    return
                 self._publish(body)
             else:
                 get_settings().data = {"artifact": body}
@@ -386,7 +388,7 @@ class PRBlockerReviewer:
             system, user = load_evidence_prompt()
             review = review_from_block(parsed)
             description = self.git_provider.get_user_description() or ""
-            people_comments, self.sources = self._people_comments(description, _cited(review))
+            people_comments, self.sources = self._people_comments(description)
             variables = {
                 "title": self.vars["title"], "branch": self.vars["branch"], "description": description,
                 "description_date": self._description_date() if description.strip() else "",

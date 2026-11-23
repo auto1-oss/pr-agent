@@ -271,6 +271,9 @@ Where the mode is on:
 - The GitHub App also runs it on every push to the PR, even when `github_app.handle_push_trigger` is false. Other
   `push_commands` still run only where push runs are on. With `github_app.ignore_bot_pr` on, a push by a bot is
   skipped like any other bot event, so the review stays on the older commit until a person pushes or comments `/review`.
+- Pushes that arrive while a review runs collapse into one more run, which reads the PR again when it starts and so
+  reviews the latest commit. A review is not published when the head moved while it ran; the run for the newer push
+  publishes instead.
 - The review is one persistent comment, edited in place on every run. Each edit posts a short comment that links to it.
 - The comment has these sections: What it does (sentences with ids `C1`, `C2`, ...), Risk with a reason, Reversible with
   how to undo, the ticket check, Proof, Blockers and Not blocking.
@@ -280,9 +283,9 @@ Where the mode is on:
 - Ids are read from the previous comment PR-Agent wrote. An id is kept for the same item and new items get a number
   above every number used so far (tracked in a `<!-- pr-agent:blocker-ids C=n B=m -->` line), so links to an id stay
   valid across pushes.
-- A blocker review that cannot be completed (answer cut off, no `blockers` key, unreadable YAML, missing prompt file)
-  posts a short failure comment and leaves the previous review untouched. Files the token budget left out of the diff
-  are named as the first Not blocking item.
+- A blocker review that cannot be completed (answer cut off, `blockers` missing or not a list, unreadable YAML, missing
+  prompt file) posts a short failure comment and leaves the previous review untouched. Files the token budget left out
+  of the diff are named as the first Not blocking item.
 - The ticket is read fresh on every run, its key taken from the PR title or else the branch name. Comments people wrote
   on the PR are given to the model as input.
 
@@ -309,13 +312,14 @@ an empty `by`.
 Left out of the comments: bots, PR-Agent itself, bare commands, the logins in `pr_reviewer.evidence_ignored_logins` and
 comments that contain a string from `pr_reviewer.evidence_ignored_markers`, such as the marker of a report another tool
 posts (both host-only). A comment longer than `pr_reviewer.evidence_comment_max_chars` keeps
-its start and its end. Comments an earlier review cited come first, then the newest.
+its start and its end. The newest comments come first. When they do not all fit, the older ones are left out, so a
+newer failed result is never pushed out by an older passing one.
 
 Where the mode is on, the GitHub App re-checks only the proof when a person comments, edits or deletes a comment,
 submits a review with text or edits the PR description. That run reads the existing review, asks the model only about
 proof and edits the Proof section and the hidden block in place. It changes nothing when the review is of an older head
 commit, when a push or a full review lands during the check or when the proof is unchanged. A failed check posts
-nothing. Bursts of comments collapse into one more run.
+nothing. Bursts of comments collapse into one more run, which reads the PR again when it starts.
 
 The comment ends with a hidden block for tools that read the review:
 

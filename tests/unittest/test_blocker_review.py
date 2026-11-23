@@ -6,8 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 import yaml
+from starlette_context import context as request_context
+from starlette_context import request_cycle_context
 
 import pr_agent.agent.pr_agent as pr_agent_module
+import pr_agent.git_providers as git_providers
 import pr_agent.servers.github_app as github_app
 import pr_agent.servers.utils as servers_utils
 import pr_agent.tools.pr_blocker_reviewer as blocker_module
@@ -84,7 +87,8 @@ def settings_guard():
             "pr_reviewer.num_max_findings", "github_app.handle_push_trigger", "github_app.push_commands",
             "pr_reviewer.evidence_ignored_logins", "pr_reviewer.evidence_ignored_markers",
             "pr_reviewer.evidence_comment_max_chars",
-            "config.propagate_tool_errors", "config.temperature", "pr_reviewer.extra_instructions"]
+            "config.propagate_tool_errors", "config.temperature", "pr_reviewer.extra_instructions",
+            "config.git_provider", "github_app.push_trigger_pending_tasks_backlog"]
     snapshot = snapshot_settings(keys)
     yield get_settings()
     restore_settings(snapshot)
@@ -136,6 +140,18 @@ class TestNormalize:
         del data["blockers"], data["not_blocking"]
         with pytest.raises(ValueError):
             normalize_review(data, {}, 5)
+
+    @pytest.mark.parametrize("blockers", [
+        {"type": "correctness", "text": "The size check counts characters, not bytes.", "case": "a 3 byte character"},
+        None, "", "The size check counts characters, not bytes."])
+    def test_blockers_that_are_not_a_list_fail_instead_of_passing(self, blockers):
+        with pytest.raises(ValueError):
+            normalize_review(_review(blockers=blockers), {}, 5)
+
+    def test_a_blocker_written_as_plain_text_is_not_blocking(self):
+        review = normalize_review(_review(blockers=["The size check counts characters, not bytes."]), {}, 5)
+        assert review["blockers"] == []
+        assert "The size check counts characters, not bytes." in review["not_blocking"]
 
     def test_dropped_ids_are_never_given_to_new_items(self):
         first = normalize_review(_review(), {}, 5)
@@ -369,6 +385,43 @@ class TestBlockerReviewerRun:
         _run_tool(monkeypatch, settings_guard, tmp_path, provider, prediction="what_it_does: [")
         assert [c["body"] for c in provider.comments] == ["Failed to run the blocker review on this PR"]
 
+    def test_blockers_as_a_mapping_keep_the_previous_review(self, monkeypatch, settings_guard, tmp_path):
+        provider = FakeProvider()
+        _run_tool(monkeypatch, settings_guard, tmp_path, provider)
+        review = provider.comments[0]["body"]
+        # The model wrote the one defect as a mapping instead of a list item.
+        answer = MODEL_OUTPUT.split("blockers:")[0] + textwrap.dedent('''\
+            blockers:
+              type: defect
+              text: The size check counts characters, not bytes.
+              case: A 400 KiB message of multi-byte characters passes the check and SNS rejects it.
+            not_blocking: []
+            ''')
+        _run_tool(monkeypatch, settings_guard, tmp_path, provider, prediction=answer)
+        assert [c["body"] for c in provider.comments] == [review, "Failed to run the blocker review on this PR"]
+
+    def test_a_newer_failed_report_reaches_the_model_before_an_older_cited_pass(self, monkeypatch, settings_guard,
+                                                                                 tmp_path):
+        settings_guard.set("pr_reviewer.evidence_comment_max_chars", 6000)
+        passed, failed = "https://gh.example/x#issuecomment-1", "https://gh.example/x#issuecomment-2"
+        provider = FakeProvider([_person("qa", "verify PASS\n" + "p" * 5990, passed, "2026-11-01T00:00:00Z")])
+        cites_the_pass = MODEL_OUTPUT.replace(
+            "    short: prod topic accepts 1 MiB\n",
+            f"    short: prod topic accepts 1 MiB\n    evidence: {{status: proven, source: '{passed}'}}\n")
+        _run_tool(monkeypatch, settings_guard, tmp_path, provider, prediction=cites_the_pass)
+        assert passed in provider.comments[-1]["body"]
+        provider.comments.append(_person("qa", "verify FAIL\n" + "f" * 5990, failed, "2026-11-19T00:00:00Z"))
+        seen = _run_tool(monkeypatch, settings_guard, tmp_path, provider)
+        assert "verify FAIL" in seen["vars"]["people_comments"]
+        assert "verify PASS" not in seen["vars"]["people_comments"]
+
+    def test_a_review_is_not_published_when_the_head_moved_during_it(self, monkeypatch, settings_guard, tmp_path):
+        heads = iter([HEAD, "9" * 40])
+        provider = FakeProvider()
+        provider.get_pr_head_sha = lambda: next(heads)
+        _run_tool(monkeypatch, settings_guard, tmp_path, provider)
+        assert provider.comments == []
+
     def test_files_left_out_of_the_diff_are_named(self, monkeypatch, settings_guard, tmp_path):
         provider = FakeProvider()
         _run_tool(monkeypatch, settings_guard, tmp_path, provider, not_reviewed=["big.sql"])
@@ -493,6 +546,54 @@ class TestKeyOff:
         asyncio.run(github_app.handle_push_trigger_for_new_commits(body, "pull_request", "alice", "1",
                                                                    "synchronize", {}, agent=None))
         assert calls == ([] if expected is None else [expected])
+
+    def test_a_queued_push_reviews_the_latest_head(self, monkeypatch, settings_guard):
+        # A runs, B waits and C is dropped. B must review C, the head when B starts, not the PR it read on arrival.
+        monkeypatch.setattr(servers_utils, "_push_trigger_states_by_ttl", {})
+        monkeypatch.setattr(servers_utils, "_active_push_trigger_states", {})
+        monkeypatch.setattr(github_app, "get_identity_provider", lambda: SimpleNamespace(
+            verify_eligibility=lambda *a, **kw: github_app.Eligibility.ELIGIBLE))
+        head = {"sha": ""}
+        monkeypatch.setitem(git_providers._GIT_PROVIDERS, "github", lambda _url: SimpleNamespace(head=head["sha"]))
+        # Reading the repo settings loads the provider before the push waits for its slot, as in production.
+        monkeypatch.setattr(github_app, "apply_repo_settings", git_providers.get_git_provider_with_context)
+        settings_guard.set("config.git_provider", "github")
+        settings_guard.set("pr_reviewer.blocker_mode", True)
+        settings_guard.set("github_app.push_trigger_pending_tasks_backlog", True)
+        reviewed = []
+
+        async def scenario():
+            first_runs = asyncio.Event()
+            release = asyncio.Event()
+
+            async def fake_perform(commands_conf, agent, body, api_url, *args, **kwargs):
+                reviewed.append(git_providers.get_git_provider_with_context(api_url).head)
+                if len(reviewed) == 1:
+                    first_runs.set()
+                    await release.wait()
+
+            monkeypatch.setattr(github_app, "_perform_auto_commands_github", fake_perform)
+
+            async def push(sha):
+                head["sha"] = sha
+                body = {"pull_request": {"url": API, "state": "open", "created_at": "1", "updated_at": "2",
+                                         "merge_commit_sha": "m"}, "before": "x", "after": sha}
+                with request_cycle_context({"settings": get_settings()}):
+                    await github_app.handle_push_trigger_for_new_commits(body, "pull_request", "alice", "1",
+                                                                         "synchronize", {}, agent=None)
+
+            a = asyncio.create_task(push("A"))
+            await asyncio.wait([a, asyncio.create_task(first_runs.wait())], timeout=10,
+                               return_when=asyncio.FIRST_COMPLETED)
+            assert first_runs.is_set(), f"push A never reached its review: {a.exception() if a.done() else a}"
+            b = asyncio.create_task(push("B"))
+            await asyncio.sleep(0)
+            await push("C")
+            release.set()
+            await asyncio.gather(a, b)
+
+        asyncio.run(scenario())
+        assert reviewed == ["A", "C"]
 
     def test_regular_review_never_adopts_a_blocker_comment(self):
         body = f"## PR Reviewer Guide 🔍\n\n{PRBlockerReviewIdentity.PERSISTENT.value}\n"
@@ -755,13 +856,11 @@ class TestPeopleComments:
         settings_guard.set("pr_reviewer.evidence_ignored_markers", markers)
         assert blocker_module.is_people_comment("erin", "User", "<!-- gate-report -->\nG2 not met") is counts
 
-    def test_cited_comments_come_first_then_the_newest(self, settings_guard):
+    def test_the_newest_comments_come_first(self, settings_guard):
         tool = _people_tool([_person("a", "old", "https://gh.example/x#issuecomment-1", "2026-11-01T00:00:00Z"),
                              _person("b", "new", "https://gh.example/x#issuecomment-2", "2026-11-19T00:00:00Z"),
                              _person("c", "mid", "https://gh.example/x#issuecomment-3", "2026-11-10T00:00:00Z")])
         assert re.findall(r'by="(\w)"', tool._people_comments("")[0]) == ["b", "c", "a"]
-        cited = {"https://gh.example/x#issuecomment-1"}
-        assert re.findall(r'by="(\w)"', tool._people_comments("", cited)[0]) == ["a", "b", "c"]
 
     @pytest.mark.parametrize("max_chars", [200, 10])
     def test_a_long_comment_keeps_its_start_and_its_end(self, settings_guard, max_chars):
@@ -1104,6 +1203,19 @@ class TestEvidenceTrigger:
                     "sender": {"login": "bob", "type": "User", "id": 7}}
         asyncio.run(github_app._dispatch_request(body, event, action))
         assert trigger.agent.requests == [(API, "/review evidence")]
+
+    def test_a_waiting_check_reads_the_pr_again(self, monkeypatch, trigger):
+        seen = []
+
+        async def handle_request(url, command, **_kwargs):
+            seen.append(dict(request_context["git_provider"]))
+            return True
+
+        monkeypatch.setattr(trigger.agent, "handle_request", handle_request)
+        with request_cycle_context({"settings": get_settings(), "git_provider": {API: "read before the wait"}}):
+            asyncio.run(github_app.handle_comments_on_pr(_comment_event("verify PASS on QA"), "issue_comment", "bob",
+                                                         7, "created", {}, trigger.agent))
+        assert seen == [{}]
 
     def test_a_description_edit_checks_the_proof(self, trigger):
         asyncio.run(github_app.handle_new_pr_opened(_pr_event({"body": {"from": "x"}}), "pull_request", "alice", 7,
