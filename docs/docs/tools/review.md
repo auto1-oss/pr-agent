@@ -248,6 +248,125 @@ ticket-compliance labels or a "No ticket found" label. See
 [Fetching ticket context](../core-abilities/fetching_ticket_context.md) for linking and authentication details.
 
 
+### Blocker mode
+
+Blocker mode replaces the regular review for repositories that turn it on. It is off by default, and a repository
+without the key gets exactly the regular review.
+
+The host operator allows the key once (`config.repo_settings_allowed_keys = ["pr_reviewer.blocker_mode", ...]`) and
+points `pr_reviewer.blocker_prompt_path` at a TOML file with the prompt. A repository then turns the mode on in the
+`.pr_agent.toml` of its default branch:
+
+```toml
+[pr_reviewer]
+blocker_mode = true
+```
+
+A comment argument such as `/review --pr_reviewer.blocker_mode=false` is rejected, and a nested `.pr_agent.toml`
+cannot set the key, so a pull request cannot switch the mode off for itself.
+
+Where the mode is on:
+
+- `/review`, typed or automatic, runs the blocker review. `-i` is ignored: every run reviews the whole PR at its head.
+- The GitHub App also runs it on every push to the PR, even when `github_app.handle_push_trigger` is false. Other
+  `push_commands` still run only where push runs are on. With `github_app.ignore_bot_pr` on, a push by a bot is
+  skipped like any other bot event, so the review stays on the older commit until a person pushes or comments `/review`.
+- Pushes that arrive while a review runs collapse into one more run, which reads the PR again when it starts and so
+  reviews the latest commit. This holds even when `github_app.push_trigger_pending_tasks_backlog` is false. A review is
+  not published when the head moved while it ran; the run for the newer push publishes instead.
+- The review is one persistent comment, edited in place on every run. Each edit posts a short comment that links to it.
+- The comment has these sections: What it does (sentences with ids `C1`, `C2`, ...), Risk with a reason, Reversible with
+  how to undo, the ticket check, Proof, Blockers and Not blocking.
+- A blocker has an id (`B1`, `B2`, ...), one of the types `defect`, `criterion_missing`, `outside_ticket`,
+  `undeclared_dependency` or `unsafe_alone` and a concrete case. An item without a valid type or case is moved to Not
+  blocking. Blockers are never cut; Not blocking holds at most `num_max_findings` items.
+- Ids are read from the previous comment PR-Agent wrote. An id is kept for the same item and new items get a number
+  above every number used so far (tracked in a `<!-- pr-agent:blocker-ids C=n B=m -->` line), so links to an id stay
+  valid across pushes.
+- A blocker review that cannot be completed (answer cut off, `blockers` missing or not a list, a blocker without
+  `text`, unreadable YAML, missing prompt file) posts a short failure comment and leaves the previous review
+  untouched. Files the token budget left out of the diff are named as the first Not blocking item.
+- The ticket is read fresh on every run, its key taken from the PR title or else the branch name. Comments people wrote
+  on the PR are given to the model as input.
+
+#### Proof per change
+
+The Proof section has one line per change: whether the PR shows that the change works and where. The status is one of
+`proven`, `failed`, `outdated` or `missing`:
+
+- `proven`: the PR description or a comment shows a result for this change, for example a test run or a QA check.
+- `failed`: a result for this change failed. The line links to it.
+- `outdated`: the result is older than a later commit that touched the same change.
+- `missing`: nothing in the PR shows a result for this change.
+
+The model sees the PR description with the time a person last wrote it, the comments people wrote (with their link,
+author, dates and file position) and the commits with their dates and files. The description time is the newest edit by
+a person in the GitHub edit history, or the creation of the PR when no person edited it. Edits by bots, PR-Agent and the
+ignored logins do not count, so a tool that rewrites the description does not make old proof in it look new. Any edit by
+a person dates the whole description. A provider without an edit history gives no time. The model may cite only the
+description or one of the comments it was shown, by its link. Who wrote a source is taken from the PR, not from the model: `by` is
+the login and `by_author` says whether it is the PR author. A `proven` status that cites anything else becomes `missing`
+with the note `source not found`. A `failed` or `outdated` status may keep a link outside the PR, such as a CI run, with
+an empty `by`.
+
+Left out of the comments: bots, PR-Agent itself, bare commands, the logins in `pr_reviewer.evidence_ignored_logins` and
+comments that contain a string from `pr_reviewer.evidence_ignored_markers`, such as the marker of a report another tool
+posts (both host-only). A comment longer than `pr_reviewer.evidence_comment_max_chars` keeps
+its start and its end. The newest comments come first. When they do not all fit, the first one that does not fit is
+cut to the space left, again keeping its start and its end, and the older ones are left out, so an older passing
+result never takes the place of a newer failed one.
+
+Where the mode is on, the GitHub App re-checks only the proof when a person comments, edits or deletes a comment,
+submits a review with text or edits the PR description. That run reads the existing review, asks the model only about
+proof and edits the Proof section and the hidden block in place. It changes nothing when the review is of an older head
+commit, when a push or a full review lands during the check or when the proof is unchanged. A failed check posts
+nothing. Bursts of comments collapse into one more run, which reads the PR again when it starts. To learn whether the
+mode is on, a comment reads the repository settings, but publishes no settings error: a repository with the mode off
+sees nothing. A host without `pr_reviewer.blocker_prompt_path` skips this and reads no settings for comments. The
+path is looked up before `config.extra_config_url` is read, so set it in the host configuration or environment: a path
+that only comes from the extra file leaves comments and description edits without the proof re-check.
+
+The comment ends with a hidden block for tools that read the review:
+
+```
+<!-- pr-agent-review
+mode: review-and-blockers
+pr: <repository>#<number>
+reviewed_sha: <full head commit SHA>
+ticket: <key or none>
+criteria: present | missing
+changes:
+  - id: C1
+    text: <short line>
+    evidence:
+      status: proven | failed | outdated | missing
+      source: description | <comment link> | <link to a failed result> | ''
+      by: <login or ''>
+      by_author: yes | no | ''
+      note: <short reason or ''>
+risk: low | mid | high
+risk_reason: <one line>
+reversible: yes | no
+undo: <only when reversible is no>
+blockers: []          # or a list of id, type, text and case
+-->
+```
+
+The prompt file has a `[pr_blocker_review_prompt]` table with `system` and `user` Jinja templates. They can use `title`,
+`branch`, `description`, `description_date`, `commit_messages_str`, `commits`, `diff`, `related_tickets`, `ticket_note`,
+`people_comments`, `previous_changes` (each with its `evidence`), `previous_blockers`, `num_max_findings`,
+`extra_instructions` and `date`. The model must answer in YAML with the keys `what_it_does` (list of `id`, `text`,
+`short` and `evidence` with `status`, `source` and `note`), `risk`, `risk_reason`, `reversible`, `undo`, `ticket`
+(`criteria`, `summary`), `blockers` (list of `id`, `type`, `text`, `case`) and `not_blocking` (list of strings). Unknown
+or missing values fall back to the strict side: risk `high`, reversible `no`, criteria `missing`. A missing `blockers`
+key fails the run instead of reading as "no blockers". `blocker_extra_instructions` cannot be set from a comment
+argument.
+
+The same file has a `[pr_evidence_review_prompt]` table for the proof-only run. Its templates can use `title`, `branch`,
+`description`, `description_date`, `people_comments`, `commits`, `changes` (list of `id`, `text` and the current
+`evidence`), `extra_instructions` and `date`. The model must answer with an `evidence` list of `id`, `status`, `source`
+and `note`. A change the answer leaves out becomes `missing`.
+
 ### Auto-blocking PRs from being merged based on the generated labels
 
 :::tip

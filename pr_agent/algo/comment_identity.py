@@ -18,6 +18,10 @@ class PRReviewIdentity(str, Enum):
     INCREMENTAL = "<!-- pr-agent:review:incremental -->"
 
 
+class PRBlockerReviewIdentity(str, Enum):
+    PERSISTENT = "<!-- pr-agent:review:blockers -->"
+
+
 class PRCodeSuggestionsHeader(str, Enum):
     SUMMARY = "## PR Code Suggestions ✨"
 
@@ -40,6 +44,7 @@ class PRDescriptionHeader(str, Enum):
 _ALL_COMMENT_IDENTITIES = (
     PRReviewIdentity.REGULAR.value,
     PRReviewIdentity.INCREMENTAL.value,
+    PRBlockerReviewIdentity.PERSISTENT.value,
     PRCodeSuggestionsIdentity.SUMMARY.value,
     PRCodeSuggestionsIdentity.NO_SUGGESTIONS.value,
     PRCodeSuggestionsIdentity.UNANCHORED.value,

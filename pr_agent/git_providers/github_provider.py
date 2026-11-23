@@ -1371,6 +1371,23 @@ class GithubProvider(GitProvider):
     def get_pr_description_full(self):
         return self.pr.body
 
+    def get_description_edits(self) -> list[dict]:
+        """Who edited the PR description and when, newest first, from the GitHub edit history.
+
+        Once the description is edited, GitHub keeps the original text as the oldest entry, with the
+        author as editor and the creation time. A description that was never edited has no entries.
+        """
+        owner, name = self.repo.split("/")
+        query = ("query($owner: String!, $name: String!, $number: Int!) {"
+                 " repository(owner: $owner, name: $name) { pullRequest(number: $number) {"
+                 " userContentEdits(first: 100) { nodes { editedAt editor { login __typename } } } } } }")
+        _, data = self.github_client._Github__requester.graphql_query(
+            query, {"owner": owner, "name": name, "number": int(self.pr_num)})
+        nodes = data["data"]["repository"]["pullRequest"]["userContentEdits"]["nodes"]
+        return [{"login": (node.get("editor") or {}).get("login") or "",
+                 "type": (node.get("editor") or {}).get("__typename") or "",
+                 "edited_at": node.get("editedAt") or ""} for node in nodes]
+
     def get_user_id(self):
         if not self.github_user_id:
             self.github_user_id = ""

@@ -32,6 +32,7 @@ from pr_agent.telemetry.meter import get_ai_calls_counter, get_commands_counter,
 from pr_agent.telemetry.shutdown import flush_telemetry
 from pr_agent.telemetry.tracer import get_tracer
 from pr_agent.tools.pr_add_docs import PRAddDocs
+from pr_agent.tools.pr_blocker_reviewer import PRBlockerReviewer, is_blocker_mode_enabled
 from pr_agent.tools.pr_code_suggestions import PRCodeSuggestions
 from pr_agent.tools.pr_config import PRConfig
 from pr_agent.tools.pr_description import PRDescription
@@ -233,6 +234,26 @@ def parse_command(command: str) -> list[str]:
     return [action] + args
 
 
+BLOCKER_REVIEW_ACTIONS = ("review", "review_pr", "auto_review")
+
+
+def _drop_blocker_setting_args(action: str, args: list[str]) -> list[str]:
+    """Drop "--section.key=value" arguments of a review in blocker mode.
+
+    Blocker mode takes its settings from configuration files only. A setting argument on a review
+    command, from a comment or an auto command, could otherwise change the model or add text to the
+    prompt and steer a review that a merge gate trusts.
+    """
+    if action.lstrip("/").lower() not in BLOCKER_REVIEW_ACTIONS or not is_blocker_mode_enabled():
+        return args
+    dropped = [argument for argument in args if argument.strip().startswith("--")]
+    if dropped:
+        get_logger().error(
+            "Dropping setting argument(s) of a review in blocker mode: "
+            + ", ".join(f"'{argument.split('=', 1)[0]}'" for argument in dropped))
+    return [argument for argument in args if not argument.strip().startswith("--")]
+
+
 def _validation_args(args: list[str]) -> list[str]:
     """Project setting arguments to their keys for command-line validation.
 
@@ -256,6 +277,7 @@ def prepare_command(command: str) -> list[str]:
     if not command_args:
         return []
     action, *args = command_args
+    args = _drop_blocker_setting_args(action, args)
     kept, rejected = [], []
     for argument in args:
         # Validate the key only. The value is free text - a review instruction may legitimately
@@ -379,6 +401,11 @@ class PRAgent:
             span.set_attribute("error.argument", arg)
             return False
 
+        kept_args = _drop_blocker_setting_args(action, args)
+        if len(kept_args) < len(args):
+            span.set_attribute("pr_agent.args_dropped", len(args) - len(kept_args))
+        args = kept_args
+
         # Update settings from args
         args = update_settings_from_args(args)
 
@@ -443,7 +470,13 @@ class PRAgent:
         try:
             with get_logger().contextualize(command=action, pr_url=pr_url):
                 get_logger().info("PR-Agent request handler started", analytics=True)
-                if action == "answer":
+                if action in BLOCKER_REVIEW_ACTIONS and is_blocker_mode_enabled():
+                    if notify:
+                        notify()
+                    tool = PRBlockerReviewer(pr_url, ai_handler=self.ai_handler, args=args)
+                    # "/review evidence" checks only the proof, after a person wrote on the PR.
+                    await (tool.run_evidence() if args and args[0] == "evidence" else tool.run())
+                elif action == "answer":
                     if notify:
                         notify()
                     await PRReviewer(pr_url, is_answer=True, args=args, ai_handler=self.ai_handler).run()
