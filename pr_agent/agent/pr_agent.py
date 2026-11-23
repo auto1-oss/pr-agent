@@ -237,6 +237,23 @@ def parse_command(command: str) -> list[str]:
 BLOCKER_REVIEW_ACTIONS = ("review", "review_pr", "auto_review")
 
 
+def _drop_blocker_setting_args(action: str, args: list[str]) -> list[str]:
+    """Drop "--section.key=value" arguments of a review in blocker mode.
+
+    Blocker mode takes its settings from configuration files only. A setting argument on a review
+    command, from a comment or an auto command, could otherwise change the model or add text to the
+    prompt and steer a review that a merge gate trusts.
+    """
+    if action.lstrip("/").lower() not in BLOCKER_REVIEW_ACTIONS or not is_blocker_mode_enabled():
+        return args
+    dropped = [argument for argument in args if argument.strip().startswith("--")]
+    if dropped:
+        get_logger().error(
+            "Dropping setting argument(s) of a review in blocker mode: "
+            + ", ".join(f"'{argument.split('=', 1)[0]}'" for argument in dropped))
+    return [argument for argument in args if not argument.strip().startswith("--")]
+
+
 def _validation_args(args: list[str]) -> list[str]:
     """Project setting arguments to their keys for command-line validation.
 
@@ -260,6 +277,7 @@ def prepare_command(command: str) -> list[str]:
     if not command_args:
         return []
     action, *args = command_args
+    args = _drop_blocker_setting_args(action, args)
     kept, rejected = [], []
     for argument in args:
         # Validate the key only. The value is free text - a review instruction may legitimately
@@ -383,17 +401,10 @@ class PRAgent:
             span.set_attribute("error.argument", arg)
             return False
 
-        # Blocker mode takes its settings from configuration files only. A "--section.key=value"
-        # argument on a review command, from a comment or an auto command, could otherwise change
-        # the model or add text to the prompt and steer a review that a merge gate trusts.
-        if action.lstrip("/").lower() in BLOCKER_REVIEW_ACTIONS and is_blocker_mode_enabled():
-            dropped = [argument for argument in args if argument.strip().startswith("--")]
-            if dropped:
-                get_logger().error(
-                    "Dropping setting argument(s) of a review in blocker mode: "
-                    + ", ".join(f"'{argument.split('=', 1)[0]}'" for argument in dropped))
-                span.set_attribute("pr_agent.args_dropped", len(dropped))
-                args = [argument for argument in args if not argument.strip().startswith("--")]
+        kept_args = _drop_blocker_setting_args(action, args)
+        if len(kept_args) < len(args):
+            span.set_attribute("pr_agent.args_dropped", len(args) - len(kept_args))
+        args = kept_args
 
         # Update settings from args
         args = update_settings_from_args(args)

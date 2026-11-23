@@ -36,7 +36,7 @@ from pr_agent.servers.utils import (
     verify_signature,
 )
 from pr_agent.telemetry.prometheus import attach_metrics_endpoint, prometheus_metrics_enabled
-from pr_agent.tools.pr_blocker_reviewer import is_blocker_mode_enabled, is_people_comment
+from pr_agent.tools.pr_blocker_reviewer import is_blocker_mode_enabled, is_people_comment, is_person
 
 setup_logger(fmt=LoggingFormat.JSON, level=get_settings().get("CONFIG.LOG_LEVEL", "DEBUG"))
 base_path = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -126,11 +126,13 @@ def _comment_pr_url(body: Dict[str, Any]) -> str:
 
 
 async def handle_evidence_trigger(body: Dict[str, Any], api_url: str, text: str, agent: PRAgent,
-                                  log_context: Dict[str, Any], settings_applied: bool = False):
+                                  log_context: Dict[str, Any], settings_applied: bool = False,
+                                  is_description: bool = False):
     """Ask the blocker review to match proof again after a person wrote on the PR.
 
     Only the proof is checked, so a comment never re-runs the full review. Events that arrive
-    while a check runs collapse into one more run.
+    while a check runs collapse into one more run. A description edit counts even when it
+    empties the description, since that can remove proof.
     """
     sender = body.get("sender") or {}
     login, user_type = str(sender.get("login") or ""), str(sender.get("type") or "")
@@ -138,7 +140,8 @@ async def handle_evidence_trigger(body: Dict[str, Any], api_url: str, text: str,
         return {}
     if not settings_applied:
         apply_repo_settings(api_url)
-    if not is_blocker_mode_enabled() or not is_people_comment(login, user_type, text):
+    by_person = is_person(login, user_type) if is_description else is_people_comment(login, user_type, text)
+    if not is_blocker_mode_enabled() or not by_person:
         return {}
     log_context["api_url"] = api_url
     with get_logger().contextualize(**log_context):
@@ -228,7 +231,8 @@ async def handle_new_pr_opened(body: Dict[str, Any],
         else:
             get_logger().info(f"User {sender=} is not eligible to process PR {api_url=}")
     elif action == "edited" and "body" in (body.get("changes") or {}):
-        return await handle_evidence_trigger(body, api_url, pull_request.get("body") or "", agent, log_context)
+        return await handle_evidence_trigger(body, api_url, pull_request.get("body") or "", agent, log_context,
+                                             is_description=True)
 
 
 # The check run each automatic command publishes its output to when `github.publish_as_check_run`

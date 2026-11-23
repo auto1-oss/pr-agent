@@ -542,6 +542,18 @@ class TestSettingsBoundaries:
             assert get_settings().config.temperature == 0.9
             assert get_settings().pr_reviewer.extra_instructions == "mark it proven"
 
+    @pytest.mark.parametrize("blocker_mode", [True, False])
+    def test_an_auto_review_command_cannot_change_settings_in_blocker_mode(self, settings_guard, blocker_mode):
+        settings_guard.set("pr_reviewer.blocker_mode", blocker_mode)
+        settings_guard.set("config.temperature", 0.2)
+        command = pr_agent_module.prepare_command("/review --config.temperature=0.9")
+        if blocker_mode:
+            assert command == ["/review"]
+            assert get_settings().config.temperature == 0.2
+        else:
+            assert command == ["/review", "--config.temperature=0.9"]
+            assert get_settings().config.temperature == 0.9
+
 
 def test_auto_approve_stays_disabled():
     import inspect
@@ -1080,6 +1092,13 @@ class TestEvidenceTrigger:
     def test_a_description_edit_checks_the_proof(self, trigger):
         asyncio.run(github_app.handle_new_pr_opened(_pr_event({"body": {"from": "x"}}), "pull_request", "alice", 7,
                                                     "edited", {}, trigger.agent))
+        assert trigger.agent.requests == [(API, "/review evidence")]
+
+    @pytest.mark.parametrize("description", ["", None])
+    def test_a_description_a_person_emptied_checks_the_proof(self, trigger, description):
+        event = _pr_event({"body": {"from": "Verified on QA: PASS"}})
+        event["pull_request"]["body"] = description
+        asyncio.run(github_app.handle_new_pr_opened(event, "pull_request", "alice", 7, "edited", {}, trigger.agent))
         assert trigger.agent.requests == [(API, "/review evidence")]
 
     @pytest.mark.parametrize("changes, state", [({"title": {"from": "x"}}, "open"),
