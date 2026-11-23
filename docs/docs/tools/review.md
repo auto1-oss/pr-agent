@@ -299,8 +299,8 @@ The model sees the PR description with the time a person last wrote it, the comm
 author, dates and file position) and the commits with their dates and files. The description time is the newest edit by
 a person in the GitHub edit history, or the creation of the PR when no person edited it. Edits by bots, PR-Agent and the
 ignored logins do not count, so a tool that rewrites the description does not make old proof in it look new. Any edit by
-a person dates the whole description. A provider without an edit history gives no time. It may cite only the description
-or one of the comments it was shown, by its link. Who wrote a source is taken from the PR, not from the model: `by` is
+a person dates the whole description. A provider without an edit history gives no time. The model may cite only the
+description or one of the comments it was shown, by its link. Who wrote a source is taken from the PR, not from the model: `by` is
 the login and `by_author` says whether it is the PR author. A `proven` status that cites anything else becomes `missing`
 with the note `source not found`. A `failed` or `outdated` status may keep a link outside the PR, such as a CI run, with
 an empty `by`.

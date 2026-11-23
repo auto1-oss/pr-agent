@@ -310,7 +310,8 @@ class PRBlockerReviewer:
             provider.publish_comment(body)
             return
         result = provider.publish_persistent_comment_full(
-            body, initial_header=body.split("\n", 1)[0], update_header=False, final_update_message=True,
+            body, initial_header=body.split("\n", 1)[0], update_header=False,
+            final_update_message=get_settings().pr_reviewer.final_update_message,
             identity_marker=PRBlockerReviewIdentity.PERSISTENT.value,
             require_agent_authorship=provider.supports_review_finding_state() is True, fallback_on_error=False)
         if result is None or result is False:
