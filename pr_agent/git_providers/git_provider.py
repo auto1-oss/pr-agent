@@ -678,6 +678,13 @@ class GitProvider(ABC):
                 description = clip_tokens(description, max_tokens_description)
             return description
 
+    def get_description_edits(self) -> list[dict] | None:
+        """Who edited the PR description and when, newest first, as dicts with login, type and edited_at.
+
+        None when the provider has no edit history.
+        """
+        return None
+
     def get_user_description(self) -> str:
         if hasattr(self, "user_description") and (self.user_description is not None):
             return self.user_description
