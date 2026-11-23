@@ -82,7 +82,8 @@ MODEL_OUTPUT = textwrap.dedent('''
 def settings_guard():
     keys = ["pr_reviewer.blocker_mode", "pr_reviewer.blocker_prompt_path", "config.publish_output",
             "pr_reviewer.num_max_findings", "github_app.handle_push_trigger", "github_app.push_commands",
-            "pr_reviewer.evidence_ignored_logins", "pr_reviewer.evidence_comment_max_chars",
+            "pr_reviewer.evidence_ignored_logins", "pr_reviewer.evidence_ignored_markers",
+            "pr_reviewer.evidence_comment_max_chars",
             "config.propagate_tool_errors", "config.temperature", "pr_reviewer.extra_instructions"]
     snapshot = snapshot_settings(keys)
     yield get_settings()
@@ -507,6 +508,11 @@ class TestSettingsBoundaries:
         assert is_repo_host_only_key("pr_reviewer", "blocker_prompt_path")
         assert CliArgs.validate_user_args(["--pr_reviewer.blocker_prompt_path=/etc/passwd"])[0] is False
 
+    def test_ignored_logins_and_markers_stay_with_the_host(self):
+        for key in ("evidence_ignored_logins", "evidence_ignored_markers"):
+            assert is_repo_host_only_key("pr_reviewer", key)
+            assert CliArgs.validate_user_args([f"--pr_reviewer.{key}=x"])[0] is False
+
     def test_nested_settings_files_cannot_switch_blocker_mode(self):
         assert "blocker_mode" in PER_DIRECTORY_HOST_ONLY_KEYS_BY_SECTION["pr_reviewer"]
 
@@ -728,17 +734,26 @@ class TestPeopleComments:
                 "source": "https://gh.example/o/r/pull/61#discussion_r3", "by": "carol", "by_author": "no"},
         }
 
-    def test_bots_commands_gate_reports_and_ignored_logins_are_left_out(self, settings_guard):
+    def test_bots_commands_marked_reports_and_ignored_logins_are_left_out(self, settings_guard):
         settings_guard.set("pr_reviewer.evidence_ignored_logins", ["jenkins-user"])
+        settings_guard.set("pr_reviewer.evidence_ignored_markers", ["<!-- gate-report"])
         tool = _people_tool([
             _person("dependabot[bot]", "bump"), _person("ci", "build ok", user_type="Bot"),
-            _person("dave", "  /review"), _person("erin", "<!-- merge-gate -->\nG2 not met"),
+            _person("dave", "  /review"), _person("erin", "<!-- gate-report -->\nG2 not met"),
             _person("Jenkins-User", "deploy done"), _person("frank", "   "), _person("agent-user", "## PR Review"),
             _person("grace", "kept", COMMENT)])
         tool.git_provider.is_comment_authored_by_pr_agent = lambda c: c["user"]["login"] == "agent-user"
         text, sources = tool._people_comments("")
         assert re.findall(r'by="([^"]*)"', text) == ["grace"]
         assert list(sources) == [COMMENT]
+
+    @pytest.mark.parametrize("markers, counts", [
+        ([], True), (None, True), ("<!-- gate-report", False), (["<!-- other", "<!-- gate-report"], False),
+        (["  "], True), (["<!-- other"], True),
+    ])
+    def test_a_marker_leaves_a_comment_out_only_when_configured(self, settings_guard, markers, counts):
+        settings_guard.set("pr_reviewer.evidence_ignored_markers", markers)
+        assert blocker_module.is_people_comment("erin", "User", "<!-- gate-report -->\nG2 not met") is counts
 
     def test_cited_comments_come_first_then_the_newest(self, settings_guard):
         tool = _people_tool([_person("a", "old", "https://gh.example/x#issuecomment-1", "2026-11-01T00:00:00Z"),
@@ -1061,15 +1076,16 @@ class TestEvidenceTrigger:
     @pytest.mark.parametrize("login, user_type, text, blocker_mode, ignored, eligible", [
         ("ci", "Bot", "build ok", True, [], True),
         ("renovate[bot]", "User", "bump", True, [], True),
-        ("erin", "User", "<!-- merge-gate -->\nG2 not met", True, [], True),
+        ("erin", "User", "<!-- gate-report -->\nG2 not met", True, [], True),
         ("bob", "User", "verify PASS", False, [], True),
         ("Jenkins-User", "User", "deploy done", True, ["jenkins-user"], True),
         ("bob", "User", "verify PASS", True, [], False),
     ])
-    def test_no_check_for_bots_gate_reports_ignored_or_ineligible_senders(self, trigger, login, user_type, text,
-                                                                          blocker_mode, ignored, eligible):
+    def test_no_check_for_bots_marked_reports_ignored_or_ineligible_senders(self, trigger, login, user_type, text,
+                                                                            blocker_mode, ignored, eligible):
         trigger.settings.set("pr_reviewer.blocker_mode", blocker_mode)
         trigger.settings.set("pr_reviewer.evidence_ignored_logins", ignored)
+        trigger.settings.set("pr_reviewer.evidence_ignored_markers", ["<!-- gate-report"])
         if not eligible:
             trigger.eligibility = github_app.Eligibility.NOT_ELIGIBLE
         asyncio.run(github_app.handle_comments_on_pr(_comment_event(text, login, user_type), "issue_comment", login,

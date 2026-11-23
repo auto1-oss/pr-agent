@@ -41,8 +41,6 @@ MAX_PEOPLE_COMMENTS_CHARS = 12000
 MAX_COMMITS = 20
 MAX_COMMIT_FILES = 30
 CUT_MARKER = "\n[... cut ...]\n"
-# Comments carrying this marker are merge gate reports about the PR, not proof written by a person.
-MERGE_GATE_MARKER = "<!-- merge-gate"
 
 
 def is_blocker_mode_enabled() -> bool:
@@ -96,6 +94,12 @@ def ignored_logins() -> set[str]:
     return {str(login).strip().lower() for login in logins if str(login).strip()}
 
 
+def ignored_markers() -> list[str]:
+    markers = get_settings().pr_reviewer.get("evidence_ignored_markers", []) or []
+    markers = [markers] if isinstance(markers, str) else markers
+    return [str(marker) for marker in markers if str(marker).strip()]
+
+
 def is_person(login: str, user_type: str) -> bool:
     """A login of a person: not a bot and not an ignored login."""
     login = (login or "").lower()
@@ -104,10 +108,10 @@ def is_person(login: str, user_type: str) -> bool:
 
 
 def is_people_comment(login: str, user_type: str, body: str) -> bool:
-    """A comment a person wrote about the PR: not a bot, not a command, not a merge gate report."""
+    """A comment a person wrote about the PR: not a bot, not a command, not carrying an ignored marker."""
     body = (body or "").strip()
     return (bool(body) and not body.startswith("/") and is_person(login, user_type)
-            and MERGE_GATE_MARKER not in body)
+            and not any(marker in body for marker in ignored_markers()))
 
 
 def _cited(review: dict) -> set[str]:
@@ -161,7 +165,7 @@ class PRBlockerReviewer:
         """Render what people wrote on the PR and return the sources the model may cite as proof.
 
         Comments an earlier review cited come first, then the newest. Bots, PR-Agent, bare commands,
-        merge gate reports and ignored logins are left out. Who wrote a source is taken from here, so
+        comments with an ignored marker and ignored logins are left out. Who wrote a source is taken from here, so
         the model cannot claim a comment was written by someone else.
         """
         provider, pr = self.git_provider, getattr(self.git_provider, "pr", None)

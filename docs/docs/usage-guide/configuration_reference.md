@@ -201,6 +201,7 @@ to-do list.
 | `blocker_prompt_path` | "" | host-only: TOML file with system and user templates in [pr_blocker_review_prompt] and [pr_evidence_review_prompt] |
 | `blocker_extra_instructions` | "" | extra instructions rendered into the blocker prompt |
 | `evidence_ignored_logins` | [] | host-only: accounts whose comments never count as proof, e.g. CI users that are not bots |
+| `evidence_ignored_markers` | [] | host-only: a comment containing one of these strings never counts as proof, e.g. the marker of a report another tool posts |
 | `evidence_comment_max_chars` | 6000 | one comment longer than this keeps its start and its end |
 
 

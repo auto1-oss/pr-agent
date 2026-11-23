@@ -269,7 +269,8 @@ Where the mode is on:
 
 - `/review`, typed or automatic, runs the blocker review. `-i` is ignored: every run reviews the whole PR at its head.
 - The GitHub App also runs it on every push to the PR, even when `github_app.handle_push_trigger` is false. Other
-  `push_commands` still run only where push runs are on.
+  `push_commands` still run only where push runs are on. With `github_app.ignore_bot_pr` on, a push by a bot is
+  skipped like any other bot event, so the review stays on the older commit until a person pushes or comments `/review`.
 - The review is one persistent comment, edited in place on every run. Each edit posts a short comment that links to it.
 - The comment has these sections: What it does (sentences with ids `C1`, `C2`, ...), Risk with a reason, Reversible with
   how to undo, the ticket check, Proof, Blockers and Not blocking.
@@ -305,8 +306,9 @@ the login and `by_author` says whether it is the PR author. A `proven` status th
 with the note `source not found`. A `failed` or `outdated` status may keep a link outside the PR, such as a CI run, with
 an empty `by`.
 
-Left out of the comments: bots, PR-Agent itself, bare commands, comments that carry `<!-- merge-gate` and the logins in
-`pr_reviewer.evidence_ignored_logins` (host-only). A comment longer than `pr_reviewer.evidence_comment_max_chars` keeps
+Left out of the comments: bots, PR-Agent itself, bare commands, the logins in `pr_reviewer.evidence_ignored_logins` and
+comments that contain a string from `pr_reviewer.evidence_ignored_markers`, such as the marker of a report another tool
+posts (both host-only). A comment longer than `pr_reviewer.evidence_comment_max_chars` keeps
 its start and its end. Comments an earlier review cited come first, then the newest.
 
 Where the mode is on, the GitHub App re-checks only the proof when a person comments, edits or deletes a comment,
